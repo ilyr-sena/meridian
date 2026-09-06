@@ -130,19 +130,36 @@ def _sign_binary(exe_path: pathlib.Path, pfx_path: pathlib.Path | None = None, p
 
 def build(sign: bool = False, pfx_path: str | None = None, pfx_pass: str | None = None):
     print(f"==> Building Meridian standalone executable from {SPEC}...")
+    import tempfile
+    import shutil
+
+    workpath = pathlib.Path(tempfile.gettempdir()) / "pyi_meridian_work"
+    distpath = pathlib.Path(tempfile.gettempdir()) / "pyi_meridian_dist"
+    workpath.mkdir(parents=True, exist_ok=True)
+    distpath.mkdir(parents=True, exist_ok=True)
+
     cmd = [
         sys.executable,
         "-m",
         "PyInstaller",
         "--clean",
         "--noconfirm",
+        "--workpath", str(workpath),
+        "--distpath", str(distpath),
         str(SPEC),
     ]
     subprocess.check_call(cmd, cwd=str(ROOT))
-    out_bin = DIST / ("meridian.exe" if sys.platform == "win32" else "meridian")
-    if not out_bin.exists():
-        print(f"Build failed: binary not found in {DIST}")
+
+    target_name = "meridian.exe" if sys.platform == "win32" else "meridian"
+    built_bin = distpath / target_name
+    if not built_bin.exists():
+        print(f"Build failed: binary not found in {distpath}")
         sys.exit(1)
+
+    DIST.mkdir(parents=True, exist_ok=True)
+    out_bin = DIST / target_name
+    print(f"  Copying {built_bin} -> {out_bin}...")
+    shutil.copy2(built_bin, out_bin)
 
     size_mb = out_bin.stat().st_size / (1024 * 1024)
     print(f"Build successful! Binary: {out_bin} ({size_mb:.1f} MB)")
