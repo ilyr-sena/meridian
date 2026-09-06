@@ -1,0 +1,35 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+.venv/
+venv/
+env/
+
+# Builds & Outputs
+dist/
+build/
+.next/
+out/
+*.egg-info/
+*.pyc
+__pycache__/
+
+# OS & IDE
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Secrets & Local State
+*.pem
+*.pfx
+*.p12
+*.key
+*.enc
+.env.local
+.env.*.local
+state/
+nohup.out
+*.log
