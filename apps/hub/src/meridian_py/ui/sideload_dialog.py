@@ -33,7 +33,10 @@ from ..sideload import sideload_app
 log = logging.getLogger(__name__)
 
 DEFAULT_IPA_PATHS = [
+    pathlib.Path(__file__).resolve().parents[4] / "runner" / "prebuilt" / "MeridianRunner-unsigned.ipa",
+    pathlib.Path.cwd() / "runner" / "prebuilt" / "MeridianRunner-unsigned.ipa",
     get_meridian_cache_dir() / "MeridianRunner-unsigned.ipa",
+    pathlib.Path.home() / "ipa-share" / "MeridianRunner-unsigned.ipa",
 ]
 
 
