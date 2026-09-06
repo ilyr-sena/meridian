@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "meridian-py"
+version = "0.2.0"
+description = "Python client/orchestrator for the Meridian iOS relay ecosystem — device tracking, H.264 streaming, WDA management"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "GPL-2.0-or-later" }
+dependencies = [
+    "pymobiledevice3>=4.0.0",
+    "requests>=2.31",
+    "cryptography",
+    "srp",
+    "certifi",
+    "PySide6>=6.5",
+]
+
+[project.scripts]
+meridian = "meridian_py.cli:main"
+meridian-py = "meridian_py.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-dir]
+"" = "src"
