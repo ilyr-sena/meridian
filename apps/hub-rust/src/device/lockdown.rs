@@ -1,6 +1,7 @@
 //! Direct Lockdown client to query device metadata and inspect pairing state.
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tracing::{debug, info};
 use crate::device::tunnel::connect_usbmuxd;
 
 pub const LOCKDOWN_PORT: u16 = 62078;
@@ -118,5 +119,46 @@ fn format_model(product_type: &str) -> String {
         "iPhone17,3" => "iPhone 16".to_string(),
         "iPhone17,4" => "iPhone 16 Plus".to_string(),
         other => other.to_string(),
+    }
+}
+
+pub async fn check_runner_installed(udid: &str, device_id: u32) -> bool {
+    use idevice::provider::UsbmuxdProvider;
+    use idevice::services::installation_proxy::InstallationProxyClient;
+    use idevice::usbmuxd::UsbmuxdAddr;
+    use idevice::IdeviceService;
+
+    let provider = UsbmuxdProvider {
+        addr: UsbmuxdAddr::default(),
+        tag: 1,
+        udid: udid.to_string(),
+        device_id,
+        label: "meridian-hub".to_string(),
+    };
+
+    match InstallationProxyClient::connect(&provider).await {
+        Ok(mut client) => {
+            match client.get_apps(Some("User"), None).await {
+                Ok(apps) => {
+                    for bid in apps.keys() {
+                        let lower = bid.to_lowercase();
+                        if lower.contains("meridian") || lower.contains("runner") || lower.contains("xctrunner") {
+                            info!("✓ Detected installed runner app: {}", bid);
+                            return true;
+                        }
+                    }
+                    info!("No runner app detected among {} user apps", apps.len());
+                    false
+                }
+                Err(e) => {
+                    debug!("Installation proxy get_apps error for {}: {:?}", udid, e);
+                    false
+                }
+            }
+        }
+        Err(e) => {
+            debug!("Installation proxy connect error for {}: {:?}", udid, e);
+            false
+        }
     }
 }

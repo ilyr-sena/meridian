@@ -12,6 +12,7 @@ pub fn view_status<'a, Message>(
     mesh: &'a MeshStatus,
     devices: &'a [DeviceReport],
     uptime_secs: u64,
+    mask_sensitive: bool,
 ) -> Element<'a, Message>
 where
     Message: 'a + Clone,
@@ -76,7 +77,7 @@ where
             container(
                 row![
                     text(format!("#{}", d.ports.slot)).font(FONT_MONO).size(12).color(TEXT_SECONDARY).width(60),
-                    text(&d.name).font(FONT_MEDIUM).size(12).color(TEXT_PRIMARY).width(160),
+                    text(d.masked_name(mask_sensitive)).font(FONT_MEDIUM).size(12).color(TEXT_PRIMARY).width(160),
                     text(format!(":{}", d.ports.wda)).font(FONT_MONO).size(12).color(ACCENT_BLUE).width(80),
                     text(format!(":{}", d.ports.stream)).font(FONT_MONO).size(12).color(ACCENT_EMERALD).width(80),
                     text(format!(":{}", d.ports.bridge)).font(FONT_MONO).size(12).color(TEXT_SECONDARY).width(80),

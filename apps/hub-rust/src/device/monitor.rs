@@ -109,14 +109,25 @@ impl DeviceMonitor {
                                             report_for_enrich.os_version = info.os_version;
                                             report_for_enrich.build_version = info.build_version;
                                             report_for_enrich.serial_number = info.serial_number;
-                                            report_for_enrich.state = DeviceState::Ready;
-                                            report_for_enrich.status_message = format!("Ready (Slot {})", ports.slot);
-                                            info!("✓ Enriched device: {} ({}, {})", report_for_enrich.name, report_for_enrich.model, report_for_enrich.os_version);
+
+                                            // Check if MeridianRunner app is installed
+                                            let is_installed = crate::device::lockdown::check_runner_installed(&udid, device_id).await;
+                                            report_for_enrich.runner_installed = is_installed;
+                                            if is_installed {
+                                                report_for_enrich.state = DeviceState::Ready;
+                                                report_for_enrich.status_message = format!("Ready (Slot {})", ports.slot);
+                                                info!("✓ Enriched device: {} ({}) — Runner INSTALLED", report_for_enrich.name, report_for_enrich.model);
+                                            } else {
+                                                report_for_enrich.state = DeviceState::NeedsSideload;
+                                                report_for_enrich.status_message = "Runner not installed".to_string();
+                                                info!("✓ Enriched device: {} ({}) — Runner NOT installed", report_for_enrich.name, report_for_enrich.model);
+                                            }
+
                                             let _ = tx_clone.send(DeviceEvent::Updated(report_for_enrich));
                                         }
                                         Err(e) => {
                                             warn!("Lockdown query deferred for {}: {:?}", udid, e);
-                                            report_for_enrich.state = DeviceState::Ready;
+                                            report_for_enrich.state = DeviceState::Connected;
                                             let _ = tx_clone.send(DeviceEvent::Updated(report_for_enrich));
                                         }
                                     }

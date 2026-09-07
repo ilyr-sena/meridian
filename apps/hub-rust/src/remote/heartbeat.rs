@@ -10,6 +10,7 @@ use crate::device::models::DeviceReport;
 
 pub const DEFAULT_API_URL: &str = "https://www.meridianhub.cc";
 
+#[derive(Debug)]
 pub struct HeartbeatWorker {
     should_run: Arc<AtomicBool>,
 }

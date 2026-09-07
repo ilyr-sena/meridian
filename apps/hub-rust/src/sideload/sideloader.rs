@@ -1,10 +1,12 @@
-//! Sideloading pipeline: signing with zsign/isideload and installation over usbmuxd.
+//! Sideloading pipeline: signing with zsign and installation over usbmuxd.
 //!
-//! Fixes cross-platform process flag bugs (creationflags on Linux) and provides
-//! native file picking via `rfd` and one-click re-sideloading.
+//! Provides native file picking via `rfd` and real-time execution with progress reporting.
 
-use std::path::PathBuf;
-use tracing::info;
+use std::path::{Path, PathBuf};
+use std::process::Stdio;
+use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::process::Command;
+use tracing::{debug, error, info, warn};
 
 #[derive(Debug, Clone)]
 pub struct SideloadOptions {
@@ -35,7 +37,7 @@ impl Sideloader {
         opts: SideloadOptions,
         progress_callback: impl Fn(f32, &str) + Send + 'static,
     ) -> anyhow::Result<()> {
-        progress_callback(0.1, "Preparing IPA package...");
+        progress_callback(0.05, "Validating IPA package...");
 
         if !opts.ipa_path.exists() {
             anyhow::bail!("Selected IPA file does not exist: {:?}", opts.ipa_path);
@@ -43,22 +45,70 @@ impl Sideloader {
 
         info!("Starting sideload process for {} on {}", opts.ipa_path.display(), opts.udid);
 
-        // 1. Authenticate with Apple Developer Portal / Anisette Server
-        progress_callback(0.25, "Authenticating with Apple ID...");
+        let script_path = find_sideload_engine();
+        if script_path.is_none() {
+            anyhow::bail!("Sideload engine helper not found in bin/");
+        }
+        let script_path = script_path.unwrap();
 
-        // 2. Locate zsign binary
-        let zsign_bin = find_zsign_binary();
-        if let Some(ref bin) = zsign_bin {
-            info!("Found zsign binary at {:?}", bin);
+        let python_bin = find_python_executable();
+
+        let mut cmd = Command::new(&python_bin);
+        cmd.arg(&script_path);
+        cmd.arg("--ipa").arg(&opts.ipa_path);
+        cmd.arg("--udid").arg(&opts.udid);
+        cmd.arg("--apple-id").arg(&opts.apple_id);
+        cmd.arg("--password").arg(&opts.password);
+        cmd.arg("--anisette").arg(&opts.anisette_url);
+
+        #[cfg(windows)]
+        {
+            cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
         }
 
-        // 3. Signing process
-        progress_callback(0.5, "Signing application bundle...");
-        tokio::time::sleep(tokio::time::Duration::from_millis(800)).await;
+        cmd.stdout(Stdio::piped());
+        cmd.stderr(Stdio::piped());
 
-        // 4. Installing over USB via usbmuxd installation proxy
-        progress_callback(0.75, "Installing onto iPhone over USB...");
-        tokio::time::sleep(tokio::time::Duration::from_millis(1200)).await;
+        let mut child = cmd.spawn()?;
+
+        let stdout = child.stdout.take().unwrap();
+        let stderr = child.stderr.take().unwrap();
+
+        let mut reader = BufReader::new(stdout).lines();
+        let mut last_error = String::new();
+
+        while let Ok(Some(line)) = reader.next_line().await {
+            debug!("[sideload] {}", line);
+            if line.starts_with("[PROGRESS:") {
+                if let Some(end) = line.find(']') {
+                    let pct_str = &line[10..end];
+                    if let Ok(pct) = pct_str.parse::<f32>() {
+                        let msg = line[end + 1..].trim();
+                        progress_callback(pct / 100.0, msg);
+                    }
+                }
+            } else if line.starts_with("[ERROR]") {
+                last_error = line[7..].trim().to_string();
+                error!("Sideload engine error: {}", last_error);
+            }
+        }
+
+        let status = child.wait().await?;
+        if !status.success() {
+            let mut err_reader = BufReader::new(stderr).lines();
+            let mut err_output = Vec::new();
+            while let Ok(Some(line)) = err_reader.next_line().await {
+                err_output.push(line);
+            }
+            let err_combined = if !last_error.is_empty() {
+                last_error
+            } else if !err_output.is_empty() {
+                err_output.join("\n")
+            } else {
+                format!("Process exited with status code: {}", status)
+            };
+            anyhow::bail!("{}", err_combined);
+        }
 
         progress_callback(1.0, "Installation complete!");
         info!("✓ Sideload successful for device {}", opts.udid);
@@ -67,21 +117,44 @@ impl Sideloader {
     }
 }
 
-fn find_zsign_binary() -> Option<PathBuf> {
-    let name = if cfg!(windows) { "zsign.exe" } else { "zsign" };
+fn find_sideload_engine() -> Option<PathBuf> {
+    let script_name = "sideload-engine.py";
 
     if let Ok(exe) = std::env::current_exe() {
-        let p = exe.parent().unwrap().join(name);
-        if p.exists() { return Some(p); }
-        let p_bin = exe.parent().unwrap().join("bin").join(name);
-        if p_bin.exists() { return Some(p_bin); }
+        if let Some(parent) = exe.parent() {
+            let candidate = parent.join(script_name);
+            if candidate.exists() { return Some(candidate); }
+            let candidate_bin = parent.join("bin").join(script_name);
+            if candidate_bin.exists() { return Some(candidate_bin); }
+            if let Some(grandparent) = parent.parent() {
+                let candidate_up_bin = grandparent.join("bin").join(script_name);
+                if candidate_up_bin.exists() { return Some(candidate_up_bin); }
+            }
+        }
     }
 
-    let local_bin = PathBuf::from("bin").join(name);
-    if local_bin.exists() { return Some(local_bin); }
+    for rel_dir in &["bin", "apps/hub-rust/bin", "apps/hub/bin"] {
+        let candidate = PathBuf::from(rel_dir).join(script_name);
+        if candidate.exists() { return Some(candidate); }
+    }
 
-    let dev_bin = PathBuf::from("apps/hub-rust/bin").join(name);
-    if dev_bin.exists() { return Some(dev_bin); }
+    None
+}
 
-    which::which(name).ok()
+fn find_python_executable() -> String {
+    // 1. Check local virtualenv in apps/hub/.venv
+    let venv_python = if cfg!(windows) {
+        PathBuf::from("apps/hub/.venv/Scripts/python.exe")
+    } else {
+        PathBuf::from("apps/hub/.venv/bin/python")
+    };
+    if venv_python.exists() {
+        return venv_python.to_string_lossy().to_string();
+    }
+
+    // 2. Check system python3 / python
+    if which::which("python3").is_ok() {
+        return "python3".to_string();
+    }
+    "python".to_string()
 }

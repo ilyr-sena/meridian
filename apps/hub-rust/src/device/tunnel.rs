@@ -92,6 +92,7 @@ pub async fn connect_usbmuxd() -> std::io::Result<UsbmuxStream> {
     }
 }
 
+#[derive(Debug)]
 pub struct ActiveTunnel {
     pub local_port: u16,
     pub device_port: u16,

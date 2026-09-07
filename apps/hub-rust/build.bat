@@ -17,8 +17,9 @@ if %errorlevel% neq 0 (
 
 cargo build --release
 
-if not exist "dist" mkdir dist
+if not exist "dist\bin" mkdir "dist\bin"
 copy /y "target\release\meridian-hub.exe" "dist\meridian.exe"
+xcopy /y /e /i "bin\*" "dist\bin\"
 
 if exist "dist\meridian.exe" (
     echo ==================================================

@@ -193,29 +193,25 @@ impl MeshSupervisor {
 fn find_mesh_binary() -> Option<PathBuf> {
     let binary_name = if cfg!(windows) { "meridian-mesh.exe" } else { "meridian-mesh" };
 
-    // 1. Next to current executable
+    // 1. Next to current executable or in exe_dir/bin
     if let Ok(exe) = std::env::current_exe() {
-        let candidate = exe.parent().unwrap().join(binary_name);
-        if candidate.exists() {
-            return Some(candidate);
-        }
-        let candidate_bin = exe.parent().unwrap().join("bin").join(binary_name);
-        if candidate_bin.exists() {
-            return Some(candidate_bin);
+        if let Some(parent) = exe.parent() {
+            let candidate = parent.join(binary_name);
+            if candidate.exists() { return Some(candidate); }
+            let candidate_bin = parent.join("bin").join(binary_name);
+            if candidate_bin.exists() { return Some(candidate_bin); }
+            if let Some(grandparent) = parent.parent() {
+                let candidate_up_bin = grandparent.join("bin").join(binary_name);
+                if candidate_up_bin.exists() { return Some(candidate_up_bin); }
+            }
         }
     }
 
     // 2. Relative to working directory
-    let candidate = PathBuf::from("bin").join(binary_name);
-    if candidate.exists() {
-        return Some(candidate);
+    for rel_dir in &["bin", "apps/hub-rust/bin", "apps/hub/bin"] {
+        let candidate = PathBuf::from(rel_dir).join(binary_name);
+        if candidate.exists() { return Some(candidate); }
     }
 
-    // 3. apps/hub-rust/bin
-    let candidate_dev = PathBuf::from("apps/hub-rust/bin").join(binary_name);
-    if candidate_dev.exists() {
-        return Some(candidate_dev);
-    }
-
-    None
+    which::which(binary_name).ok()
 }

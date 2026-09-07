@@ -9,7 +9,7 @@ use iced::{
     window, Element, Length, Subscription, Task,
 };
 use tokio::sync::mpsc;
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::core::slots::{DevicePorts, SlotManager};
 use crate::core::vault::Vault;
@@ -44,6 +44,8 @@ pub enum Message {
     TabSelected(Tab),
     DeviceEvent(DeviceEvent),
     StartDevice(String),
+    DeviceStarted(String, Vec<Arc<ActiveTunnel>>, Option<Arc<HeartbeatWorker>>),
+    DeviceLaunchFailed(String, String, Vec<Arc<ActiveTunnel>>),
     StopDevice(String),
     OpenSideload(String),
     BrowseIpa,
@@ -74,8 +76,8 @@ pub enum Message {
 pub struct MeridianApp {
     active_tab: Tab,
     devices: Vec<DeviceReport>,
-    active_tunnels: HashMap<String, Vec<ActiveTunnel>>,
-    active_heartbeats: HashMap<String, HeartbeatWorker>,
+    active_tunnels: HashMap<String, Vec<Arc<ActiveTunnel>>>,
+    active_heartbeats: HashMap<String, Arc<HeartbeatWorker>>,
     slot_mgr: SlotManager,
     vault: Vault,
     mesh_supervisor: Arc<MeshSupervisor>,
@@ -171,20 +173,30 @@ impl MeridianApp {
                     info!("Device detached in UI: {}", udid);
                     self.add_log(LogLevel::Warn, format!("Detached iPhone: {}", udid));
                     self.devices.retain(|d| d.udid != udid);
-                    if let Some(mut tunnels) = self.active_tunnels.remove(&udid) {
-                        for t in &mut tunnels {
-                            t.stop();
+                    if let Some(tunnels) = self.active_tunnels.remove(&udid) {
+                        for t in &tunnels {
+                            // Tunnels dropped
                         }
                     }
-                    if let Some(hb) = self.active_heartbeats.remove(&udid) {
-                        hb.stop();
-                    }
+                    self.active_heartbeats.remove(&udid);
                 }
             },
             Message::StartDevice(udid) => {
-                if let Some(dev) = self.devices.iter_mut().find(|d| d.udid == udid) {
-                    dev.state = DeviceState::Starting;
-                    dev.status_message = "Binding tunnels and launching runner...".to_string();
+                let dev_opt = self.devices.iter().find(|d| d.udid == udid).cloned();
+                if let Some(dev) = dev_opt {
+                    if !dev.runner_installed {
+                        self.add_log(LogLevel::Warn, "Cannot start session: MeridianRunner is not installed on this device. Please sideload first.".to_string());
+                        if let Some(d) = self.devices.iter_mut().find(|d| d.udid == udid) {
+                            d.state = DeviceState::NeedsSideload;
+                            d.status_message = "Runner not installed".to_string();
+                        }
+                        return Task::none();
+                    }
+
+                    if let Some(d) = self.devices.iter_mut().find(|d| d.udid == udid) {
+                        d.state = DeviceState::Starting;
+                        d.status_message = "Binding tunnels and launching runner...".to_string();
+                    }
                     let ports = dev.ports;
                     let dev_id = dev.device_id;
                     let dev_copy = dev.clone();
@@ -198,44 +210,50 @@ impl MeridianApp {
                         let stream_tun = start_tunnel(ports.stream, 9200, dev_id, udid.clone()).await;
 
                         let mut tunnels = Vec::new();
-                        if let Ok(t) = wda_tun { tunnels.push(t); }
-                        if let Ok(t) = stream_tun { tunnels.push(t); }
+                        if let Ok(t) = wda_tun { tunnels.push(Arc::new(t)); }
+                        if let Ok(t) = stream_tun { tunnels.push(Arc::new(t)); }
 
                         // 2. Launch MeridianRunner app
-                        let _ = launch_meridian_runner(&udid, ports.stream, None).await;
+                        let launch_res = launch_meridian_runner(&udid, ports.stream, None).await;
 
-                        // 3. Start Heartbeat worker
-                        let hb = HeartbeatWorker::start(dev_copy, mesh_ip, None);
+                        // 3. Start Heartbeat worker if launched successfully
+                        let hb = if launch_res.is_ok() {
+                            Some(Arc::new(HeartbeatWorker::start(dev_copy, mesh_ip, None)))
+                        } else {
+                            None
+                        };
 
-                        (udid, tunnels, hb)
-                    }, |(udid, _tunnels, _hb)| {
-                        Message::DeviceEvent(DeviceEvent::Updated(DeviceReport {
-                            udid: udid.clone(),
-                            device_id: 0,
-                            name: String::new(),
-                            model: String::new(),
-                            os_version: String::new(),
-                            build_version: String::new(),
-                            serial_number: None,
-                            ports: DevicePorts::for_slot(0),
-                            state: DeviceState::Running,
-                            status_message: "Streaming active".to_string(),
-                            runner_installed: true,
-                            battery_level: None,
-                        }))
+                        (udid, tunnels, hb, launch_res)
+                    }, |(udid, tunnels, hb, launch_res)| {
+                        match launch_res {
+                            Ok(_) => Message::DeviceStarted(udid, tunnels, hb),
+                            Err(e) => Message::DeviceLaunchFailed(udid, e.to_string(), tunnels),
+                        }
                     });
                 }
             }
+            Message::DeviceStarted(udid, tunnels, hb) => {
+                self.active_tunnels.insert(udid.clone(), tunnels);
+                if let Some(worker) = hb {
+                    self.active_heartbeats.insert(udid.clone(), worker);
+                }
+                if let Some(dev) = self.devices.iter_mut().find(|d| d.udid == udid) {
+                    dev.state = DeviceState::Running;
+                    dev.status_message = format!("Live Streaming on :{}", dev.ports.stream);
+                }
+                self.add_log(LogLevel::Info, format!("✓ Meridian session LIVE for {}", udid));
+            }
+            Message::DeviceLaunchFailed(udid, err, tunnels) => {
+                if let Some(dev) = self.devices.iter_mut().find(|d| d.udid == udid) {
+                    dev.state = DeviceState::Error;
+                    dev.status_message = err.clone();
+                }
+                self.add_log(LogLevel::Error, format!("Failed to start session on {}: {}", udid, err));
+            }
             Message::StopDevice(udid) => {
                 self.add_log(LogLevel::Info, format!("Stopping session for {}", udid));
-                if let Some(mut tunnels) = self.active_tunnels.remove(&udid) {
-                    for t in &mut tunnels {
-                        t.stop();
-                    }
-                }
-                if let Some(hb) = self.active_heartbeats.remove(&udid) {
-                    hb.stop();
-                }
+                self.active_tunnels.remove(&udid);
+                self.active_heartbeats.remove(&udid);
                 if let Some(dev) = self.devices.iter_mut().find(|d| d.udid == udid) {
                     dev.state = DeviceState::Ready;
                     dev.status_message = "Ready".to_string();
@@ -296,10 +314,15 @@ impl MeridianApp {
                         self.sideload.status_message = "Installation succeeded!".to_string();
                         self.sideload.is_open = false;
                         self.add_log(LogLevel::Info, format!("Sideload successful for {}", self.sideload.udid));
+                        if let Some(dev) = self.devices.iter_mut().find(|d| d.udid == self.sideload.udid) {
+                            dev.runner_installed = true;
+                            dev.state = DeviceState::Ready;
+                            dev.status_message = format!("Ready (Slot {})", dev.ports.slot);
+                        }
                     }
                     Err(e) => {
-                        self.sideload.status_message = format!("Failed: {}", e);
-                        self.add_log(LogLevel::Error, format!("Sideload error: {}", e));
+                        self.sideload.status_message = format!("Error: {}", e);
+                        self.add_log(LogLevel::Error, format!("Sideload failed: {}", e));
                     }
                 }
             }
@@ -427,6 +450,7 @@ impl MeridianApp {
                 &self.mesh_status,
                 &self.devices,
                 self.uptime_secs,
+                self.settings.mask_sensitive,
             ),
             Tab::Logs => view_logs(
                 &self.logs,

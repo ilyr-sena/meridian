@@ -7,6 +7,7 @@ use crate::core::slots::DevicePorts;
 pub enum DeviceState {
     Offline,
     Connected,
+    NeedsSideload,
     Pairing,
     Ready,
     Starting,
@@ -19,10 +20,11 @@ impl DeviceState {
         match self {
             DeviceState::Offline => "Offline",
             DeviceState::Connected => "Connected",
+            DeviceState::NeedsSideload => "Runner Not Installed",
             DeviceState::Pairing => "Pairing",
             DeviceState::Ready => "Ready",
             DeviceState::Starting => "Starting...",
-            DeviceState::Running => "Running",
+            DeviceState::Running => "Live Streaming",
             DeviceState::Error => "Error",
         }
     }
@@ -56,7 +58,7 @@ impl DeviceReport {
             serial_number: None,
             ports,
             state: DeviceState::Connected,
-            status_message: "Detected on USB".to_string(),
+            status_message: "Detecting installed services...".to_string(),
             runner_installed: false,
             battery_level: None,
         }

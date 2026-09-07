@@ -44,11 +44,14 @@ fn view_device_card<'a, Message>(
 where
     Message: 'a + Clone,
 {
-    // Status dot color
+    // Status dot color & label
     let (dot_color, status_text) = match dev.state {
         DeviceState::Running => (ACCENT_EMERALD, "Live Streaming"),
         DeviceState::Starting => (ACCENT_AMBER, "Starting Services..."),
-        DeviceState::Ready => (ACCENT_BLUE, "Ready to Stream"),
+        DeviceState::Ready => (ACCENT_EMERALD, "Ready to Stream"),
+        DeviceState::NeedsSideload => (ACCENT_AMBER, "Runner Not Installed"),
+        DeviceState::Pairing => (ACCENT_BLUE, "Trust Computer Prompt"),
+        DeviceState::Error => (ACCENT_ROSE, "Error"),
         _ => (TEXT_MUTED, "Connected"),
     };
 
@@ -150,21 +153,45 @@ where
                 .align_y(Alignment::Center)
                 .into()
         }
-        _ => {
-            let btn_start = button(text("Start Session").font(FONT_MEDIUM).size(12))
-                .padding([6, 18])
-                .on_press(on_start(dev.udid.clone()))
-                .style(style_button_primary);
-
-            let btn_sideload = button(text("Re-Sideload").font(FONT_MEDIUM).size(12))
-                .padding([6, 14])
-                .on_press(on_sideload(dev.udid.clone()))
+        DeviceState::Starting => {
+            let btn_starting = button(text("Starting...").font(FONT_MEDIUM).size(12))
+                .padding([6, 16])
                 .style(style_button_secondary);
 
-            row![btn_start, btn_sideload]
+            row![btn_starting]
                 .spacing(8)
                 .align_y(Alignment::Center)
                 .into()
+        }
+        _ => {
+            if dev.runner_installed {
+                // Runner IS installed: offer Start Session and Re-Sideload
+                let btn_start = button(text("Start Session").font(FONT_MEDIUM).size(12))
+                    .padding([6, 18])
+                    .on_press(on_start(dev.udid.clone()))
+                    .style(style_button_primary);
+
+                let btn_re_sideload = button(text("Re-Sideload").font(FONT_MEDIUM).size(12))
+                    .padding([6, 14])
+                    .on_press(on_sideload(dev.udid.clone()))
+                    .style(style_button_secondary);
+
+                row![btn_start, btn_re_sideload]
+                    .spacing(8)
+                    .align_y(Alignment::Center)
+                    .into()
+            } else {
+                // Runner is NOT installed: only offer Sideload Runner
+                let btn_sideload = button(text("Sideload Runner").font(FONT_MEDIUM).size(12))
+                    .padding([6, 20])
+                    .on_press(on_sideload(dev.udid.clone()))
+                    .style(style_button_primary);
+
+                row![btn_sideload]
+                    .spacing(8)
+                    .align_y(Alignment::Center)
+                    .into()
+            }
         }
     };
 
