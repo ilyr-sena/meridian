@@ -1,4 +1,4 @@
 @echo off
 cd /d "%~dp0"
-echo Building Meridian Hub (Windows)...
-call apps\hub\build.bat %*
+echo Building Meridian Hub (Pure Rust - Windows)...
+call apps\hub-rust\build.bat %*

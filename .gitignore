@@ -8,6 +8,7 @@ env/
 # Builds & Outputs
 dist/
 build/
+target/
 .next/
 out/
 *.egg-info/
@@ -15,6 +16,7 @@ out/
 __pycache__/
 
 # OS & IDE
+.stfolder/
 .DS_Store
 Thumbs.db
 .idea/

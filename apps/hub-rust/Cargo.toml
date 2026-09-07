@@ -1,0 +1,70 @@
+[package]
+name = "meridian-hub"
+version = "0.4.0"
+edition = "2024"
+description = "High-performance native desktop hub and device orchestrator for Meridian"
+license = "MIT"
+
+[dependencies]
+tokio = { version = "1.43", features = ["full"] }
+tokio-util = "0.7"
+tokio-stream = "0.1"
+futures = "0.3"
+async-trait = "0.1"
+
+# GUI
+iced = { version = "0.14.0", features = ["svg", "image", "tokio", "advanced"] }
+rfd = "0.17"
+
+# iOS & USB Services
+idevice = { version = "0.1.65", features = ["full"] }
+isideload = { version = "0.3.17", default-features = false, features = ["install", "tokio-mt"] }
+plist = "1.7"
+rusb = "0.9"
+
+# Networking & Web
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream", "multipart"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Cryptography & Vault
+aes-gcm = "0.10"
+argon2 = "0.5"
+rand = "0.8"
+sha2 = "0.10"
+base64 = "0.22"
+
+# System & Utilities
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+thiserror = "2.0"
+anyhow = "1.0"
+dirs = "5.0"
+which = "7.0"
+chrono = "0.4"
+image = { version = "0.25", default-features = false, features = ["png"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_Threading",
+    "Win32_System_ProcessStatus",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_NetworkManagement_WindowsFirewall",
+    "Win32_System_Com",
+] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[build-dependencies]
+winres = "0.1"
+
+[profile.release]
+opt-level = 3
+lto = false
+codegen-units = 16
+panic = "abort"
+strip = true
