@@ -64,13 +64,13 @@ def ensure_anisette_server(port: int = 6969, remote_url: str = "") -> str:
     server_bin = ani_dir / "omnisette-server"
     if server_bin.exists():
         log.info("starting local omnisette-server on :%d...", port)
-        _NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
+        kws = {"creationflags": 0x08000000} if sys.platform == "win32" else {}
         subprocess.Popen(
             [str(server_bin), "--ip", "127.0.0.1", "--http-port", str(port)],
             cwd=str(ani_dir),
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
-            creationflags=_NO_WINDOW,
+            **kws,
         )
         for _ in range(25):
             time.sleep(0.3)

@@ -102,12 +102,13 @@ def sign_ipa(
 
     log.info("signing %s -> %s (zsign)", in_path.name, out_path.name)
     _NO_WINDOW = 0x08000000
+    kws = {"creationflags": 0x08000000} if sys.platform == "win32" else {}
     proc = subprocess.run(
         cmd,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
-        creationflags=_NO_WINDOW,
+        **kws,
     )
 
     if proc.returncode != 0:
