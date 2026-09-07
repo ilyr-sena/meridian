@@ -38,30 +38,36 @@ impl HeartbeatWorker {
                     "model": report.model,
                     "version": report.os_version,
                     "build": report.build_version,
+                    "tailscale_ip": mesh_ip,
+                    "mesh_ip": mesh_ip,
+                    "host_ports": {
+                        "wda": report.ports.wda,
+                        "stream": report.ports.stream,
+                        "bridge": report.ports.bridge,
+                    },
                     "ports": {
                         "slot": report.ports.slot,
                         "wda": report.ports.wda,
                         "stream": report.ports.stream,
                         "bridge": report.ports.bridge,
                     },
-                    "mesh_ip": mesh_ip,
                     "status": "online",
                     "timestamp": chrono::Utc::now().to_rfc3339(),
                 });
 
                 match client.post(&endpoint).json(&payload).send().await {
                     Ok(resp) if resp.status().is_success() => {
-                        debug!("✓ Heartbeat synced for {}", report.udid);
+                        debug!("✓ Cloud heartbeat synced for {}", report.udid);
                     }
                     Ok(resp) => {
-                        debug!("Heartbeat non-200 for {}: {}", report.udid, resp.status());
+                        debug!("Cloud heartbeat status {}: {}", report.udid, resp.status());
                     }
                     Err(e) => {
-                        debug!("Heartbeat send error for {}: {:?}", report.udid, e);
+                        debug!("Cloud heartbeat error {}: {:?}", report.udid, e);
                     }
                 }
 
-                tokio::time::sleep(Duration::from_secs(10)).await;
+                tokio::time::sleep(Duration::from_secs(8)).await;
             }
 
             // Send offline payload when stopped
@@ -79,5 +85,22 @@ impl HeartbeatWorker {
 
     pub fn stop(&self) {
         self.should_run.store(false, Ordering::SeqCst);
+    }
+}
+
+pub async fn send_offline_sync(udid: &str, api_url: Option<&str>) {
+    let base_url = api_url.unwrap_or(DEFAULT_API_URL);
+    let endpoint = format!("{}/api/devices/heartbeat", base_url.trim_end_matches('/'));
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(3))
+        .build();
+    if let Ok(c) = client {
+        let payload = json!({
+            "udid": udid,
+            "status": "offline",
+            "timestamp": chrono::Utc::now().to_rfc3339(),
+        });
+        let _ = c.post(&endpoint).json(&payload).send().await;
+        debug!("Sent offline presence update for {}", udid);
     }
 }

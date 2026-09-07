@@ -9,7 +9,7 @@ use tokio::sync::RwLock;
 use tracing::{debug, info};
 
 use idevice::{
-    IdeviceService, ReadWrite,
+    IdeviceService,
     provider::UsbmuxdProvider,
     services::{
         core_device::{ButtonState, IndigoHidClient},
@@ -235,11 +235,11 @@ impl CoreDeviceHid {
     /// - "siri": UsagePage 0x0C, UsageCode 0xCF
     /// - "keyboard-toggle": UsagePage 0x0C, UsageCode 0x01AE
     pub async fn send_hardware_button(
-        udid: &str,
+        udid: String,
         device_id: u32,
-        action: &str,
+        action: String,
     ) -> anyhow::Result<()> {
-        let (usage_page, usage_code, hold_ms) = match action {
+        let (usage_page, usage_code, hold_ms) = match action.as_str() {
             "home" => (0x0Cu64, 0x40u64, 50u64),
             "lock" => (0x0Cu64, 0x30u64, 400u64),
             "volume-up" => (0x0Cu64, 0xE9u64, 50u64),
@@ -255,7 +255,7 @@ impl CoreDeviceHid {
         let provider = UsbmuxdProvider {
             addr: UsbmuxdAddr::default(),
             tag: 1,
-            udid: udid.to_string(),
+            udid: udid.clone(),
             device_id,
             label: "meridian-hub".to_string(),
         };
@@ -266,8 +266,16 @@ impl CoreDeviceHid {
         let mut handle = adapter.to_async_handle();
 
         let rsd_stream = handle.connect(rsd_port).await?;
-        let mut rsd = RsdHandshake::new(rsd_stream).await?;
-        let mut hid: IndigoHidClient<Box<dyn ReadWrite>> = rsd.connect(&mut handle).await?;
+        let rsd = RsdHandshake::new(rsd_stream).await?;
+        let hid_entry = rsd
+            .services
+            .get("com.apple.coredevice.hid.indigo")
+            .ok_or_else(|| anyhow::anyhow!("Indigo HID service not found on RSD"))?;
+
+        let hid_stream = handle.connect(hid_entry.port).await?;
+        let mut xpc_client = idevice::RemoteXpcClient::new(hid_stream).await?;
+        xpc_client.do_handshake().await?;
+        let mut hid = IndigoHidClient::new(xpc_client);
 
         hid.send_button(usage_page, usage_code, ButtonState::Down).await?;
         tokio::time::sleep(Duration::from_millis(hold_ms)).await;

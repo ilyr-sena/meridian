@@ -13,11 +13,13 @@ use tracing::info;
 
 use crate::core::slots::SlotManager;
 use crate::core::vault::Vault;
+use crate::device::actions::WdaClient;
 use crate::device::launcher::{kill_meridian_runner, launch_meridian_runner};
 use crate::device::models::{DeviceReport, DeviceState};
 use crate::device::monitor::{DeviceEvent, DeviceMonitor};
 use crate::device::tunnel::{start_tunnel, ActiveTunnel};
-use crate::remote::heartbeat::HeartbeatWorker;
+use crate::remote::bridge::BridgeServer;
+use crate::remote::heartbeat::{send_offline_sync, HeartbeatWorker};
 use crate::remote::key_fetcher::KeyFetcher;
 use crate::remote::mesh::{MeshStatus, MeshSupervisor};
 use crate::sideload::sideloader::{SideloadOptions, Sideloader};
@@ -44,7 +46,7 @@ pub enum Message {
     TabSelected(Tab),
     DeviceEvent(DeviceEvent),
     StartDevice(String),
-    DeviceStarted(String, Vec<Arc<ActiveTunnel>>, Option<Arc<HeartbeatWorker>>),
+    DeviceStarted(String, Vec<Arc<ActiveTunnel>>, Option<Arc<BridgeServer>>),
     DeviceLaunchFailed(String, String, Vec<Arc<ActiveTunnel>>),
     StopDevice(String),
     OpenSideload(String),
@@ -78,6 +80,7 @@ pub struct MeridianApp {
     devices: Vec<DeviceReport>,
     active_tunnels: HashMap<String, Vec<Arc<ActiveTunnel>>>,
     active_heartbeats: HashMap<String, Arc<HeartbeatWorker>>,
+    active_bridges: HashMap<String, Arc<BridgeServer>>,
     slot_mgr: SlotManager,
     vault: Vault,
     mesh_supervisor: Arc<MeshSupervisor>,
@@ -124,6 +127,7 @@ impl MeridianApp {
             devices: Vec::new(),
             active_tunnels: HashMap::new(),
             active_heartbeats: HashMap::new(),
+            active_bridges: HashMap::new(),
             slot_mgr,
             vault,
             mesh_supervisor,
@@ -159,10 +163,13 @@ impl MeridianApp {
                     info!("Device attached in UI: {}", report.udid);
                     self.add_log(LogLevel::Info, format!("Attached iPhone: {} (UDID: {})", report.name, report.udid));
                     if let Some(pos) = self.devices.iter().position(|d| d.udid == report.udid) {
-                        self.devices[pos] = report;
+                        self.devices[pos] = report.clone();
                     } else {
-                        self.devices.push(report);
+                        self.devices.push(report.clone());
                     }
+                    // Start continuous cloud presence heartbeat worker for attached device
+                    let hb = Arc::new(HeartbeatWorker::start(report.clone(), self.mesh_status.mesh_ip.clone(), None));
+                    self.active_heartbeats.insert(report.udid.clone(), hb);
                 }
                 DeviceEvent::Updated(report) => {
                     if let Some(pos) = self.devices.iter().position(|d| d.udid == report.udid) {
@@ -174,7 +181,16 @@ impl MeridianApp {
                     self.add_log(LogLevel::Warn, format!("Detached iPhone: {}", udid));
                     self.devices.retain(|d| d.udid != udid);
                     self.active_tunnels.remove(&udid);
-                    self.active_heartbeats.remove(&udid);
+                    if let Some(hb) = self.active_heartbeats.remove(&udid) {
+                        hb.stop();
+                    }
+                    if let Some(b) = self.active_bridges.remove(&udid) {
+                        b.stop();
+                    }
+                    let udid_clone = udid.clone();
+                    tokio::spawn(async move {
+                        send_offline_sync(&udid_clone, None).await;
+                    });
                 }
             },
             Message::StartDevice(udid) => {
@@ -195,13 +211,11 @@ impl MeridianApp {
                     }
                     let ports = dev.ports;
                     let dev_id = dev.device_id;
-                    let dev_copy = dev.clone();
-                    let mesh_ip = self.mesh_status.mesh_ip.clone();
 
-                    self.add_log(LogLevel::Info, format!("Starting session for {} on WDA :{}, Stream :{}", udid, ports.wda, ports.stream));
+                    self.add_log(LogLevel::Info, format!("Starting session for {} on WDA :{}, Stream :{}, Bridge :{}", udid, ports.wda, ports.stream, ports.bridge));
 
                     return Task::perform(async move {
-                        // 1. Start tunnels for WDA and Stream
+                        // 1. Start tunnels for WDA (8100) and Stream (9200)
                         let wda_tun = start_tunnel(ports.wda, 8100, dev_id, udid.clone()).await;
                         let stream_tun = start_tunnel(ports.stream, 9200, dev_id, udid.clone()).await;
 
@@ -212,26 +226,26 @@ impl MeridianApp {
                         // 2. Launch MeridianRunner app in pure Rust via CoreDevice / DVT
                         let launch_res = launch_meridian_runner(udid.clone(), dev_id, ports.stream, None).await;
 
-                        // 3. Start Heartbeat worker if launched successfully
-                        let hb = if launch_res.is_ok() {
-                            Some(Arc::new(HeartbeatWorker::start(dev_copy, mesh_ip, None)))
+                        // 3. Start BridgeServer on port 9001 if launched successfully
+                        let bridge = if launch_res.is_ok() {
+                            Some(Arc::new(BridgeServer::start(ports.bridge, ports.wda, udid.clone(), dev_id)))
                         } else {
                             None
                         };
 
-                        (udid, tunnels, hb, launch_res)
-                    }, |(udid, tunnels, hb, launch_res)| {
+                        (udid, tunnels, bridge, launch_res)
+                    }, |(udid, tunnels, bridge, launch_res)| {
                         match launch_res {
-                            Ok(_) => Message::DeviceStarted(udid, tunnels, hb),
+                            Ok(_) => Message::DeviceStarted(udid, tunnels, bridge),
                             Err(e) => Message::DeviceLaunchFailed(udid, e.to_string(), tunnels),
                         }
                     });
                 }
             }
-            Message::DeviceStarted(udid, tunnels, hb) => {
+            Message::DeviceStarted(udid, tunnels, bridge) => {
                 self.active_tunnels.insert(udid.clone(), tunnels);
-                if let Some(worker) = hb {
-                    self.active_heartbeats.insert(udid.clone(), worker);
+                if let Some(b) = bridge {
+                    self.active_bridges.insert(udid.clone(), b);
                 }
                 if let Some(dev) = self.devices.iter_mut().find(|d| d.udid == udid) {
                     dev.state = DeviceState::Running;
@@ -249,7 +263,9 @@ impl MeridianApp {
             Message::StopDevice(udid) => {
                 self.add_log(LogLevel::Info, format!("Stopping session for {}", udid));
                 self.active_tunnels.remove(&udid);
-                self.active_heartbeats.remove(&udid);
+                if let Some(b) = self.active_bridges.remove(&udid) {
+                    b.stop();
+                }
                 if let Some(dev) = self.devices.iter_mut().find(|d| d.udid == udid) {
                     dev.state = DeviceState::Ready;
                     dev.status_message = "Ready".to_string();
@@ -257,7 +273,11 @@ impl MeridianApp {
                 let dev_id = self.devices.iter().find(|d| d.udid == udid).map(|d| d.device_id).unwrap_or(0);
                 let udid_clone = udid.clone();
                 return Task::perform(async move {
+                    // Close the iOS runner app via CoreDevice
                     let _ = kill_meridian_runner(udid_clone, dev_id, None).await;
+                    // Navigate to homescreen via WDA
+                    let wda = WdaClient::new("http://127.0.0.1:8100");
+                    let _ = wda.homescreen().await;
                 }, |_| Message::Tick);
             }
             Message::OpenSideload(udid) => {
