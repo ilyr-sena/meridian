@@ -184,12 +184,14 @@ async fn invoke_native_kill(udid: &str, device_id: u32, bundle_id: &str) -> anyh
                                 if let Ok(procs) = app_service.list_processes().await {
                                     for p in procs {
                                         if let Some(ref url) = p.executable_url {
-                                            if url.relative.contains("meridian")
-                                                || url.relative.contains("runner")
-                                                || url.relative.contains(bundle_id)
+                                            let lower = url.relative.to_lowercase();
+                                            if lower.contains("runner")
+                                                || lower.contains("meridian")
+                                                || lower.contains("webdriver")
+                                                || lower.contains(&bundle_id.to_lowercase())
                                             {
                                                 let _ = app_service.send_signal(p.pid, 9).await;
-                                                info!("✓ Sent SIGKILL to PID {}", p.pid);
+                                                info!("✓ Sent SIGKILL to runner PID: {} ({})", p.pid, url.relative);
                                             }
                                         }
                                     }

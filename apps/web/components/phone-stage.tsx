@@ -437,12 +437,15 @@ export function PhoneStage({ className }: { className?: string }) {
     const host =
       typeof window !== "undefined" ? window.location.host : "meridianhub.cc"
 
+    const targetIp = activeDevice?.tailscale_ip
+    const prefix = targetIp ? `/dev/${targetIp}` : `/dev`
+
     return {
-      streamBase: `${proto}//${host}/dev/${streamPort}`,
-      streamWs: `${wsProto}//${host}/dev/${streamPort}/stream.ws`,
-      wdaBase: `${proto}//${host}/dev/${wdaPort}`,
-      controlWs: `${wsProto}//${host}/dev/${bridgePort}/ws`,
-      controlHttp: `${proto}//${host}/dev/${bridgePort}`,
+      streamBase: `${proto}//${host}${prefix}/${streamPort}`,
+      streamWs: `${wsProto}//${host}${prefix}/${streamPort}/stream.ws`,
+      wdaBase: `${proto}//${host}${prefix}/${wdaPort}`,
+      controlWs: `${wsProto}//${host}${prefix}/${bridgePort}/ws`,
+      controlHttp: `${proto}//${host}${prefix}/${bridgePort}`,
     }
   }, [activeDevice])
 

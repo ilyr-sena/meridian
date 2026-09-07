@@ -154,14 +154,14 @@ async fn handle_connection(
 
     if req.method == "GET" && (req.path == "/apps.json" || req.path.starts_with("/apps.json?")) {
         let apps = fetch_apps(udid.clone(), device_id).await.unwrap_or_default();
-        let body = serde_json::to_vec(&apps)?;
+        let body = serde_json::to_vec(&serde_json::json!({ "apps": apps }))?;
         send_cors_response(&mut stream, 200, "OK", "application/json", body).await?;
         return Ok(());
     }
 
     if req.method == "GET" && (req.path == "/apps/running.json" || req.path.starts_with("/apps/running.json?")) {
         let procs = fetch_running_processes(udid.clone(), device_id).await.unwrap_or_default();
-        let body = serde_json::to_vec(&procs)?;
+        let body = serde_json::to_vec(&serde_json::json!({ "running": procs }))?;
         send_cors_response(&mut stream, 200, "OK", "application/json", body).await?;
         return Ok(());
     }
@@ -240,6 +240,12 @@ async fn send_cors_response(
 // Native WebSocket Handler
 // ---------------------------------------------------------------------------
 
+#[derive(Default, Clone)]
+struct GestureState {
+    start: Option<(f32, f32, std::time::Instant)>,
+    last: (f32, f32),
+}
+
 async fn handle_websocket(
     mut stream: TcpStream,
     sec_key: String,
@@ -265,7 +271,9 @@ async fn handle_websocket(
     stream.flush().await?;
     debug!("✓ WebSocket connected on /ws");
 
+    let gesture_state = Arc::new(tokio::sync::Mutex::new(GestureState::default()));
     let mut buf = [0u8; 4096];
+
     loop {
         let n = match stream.read(&mut buf).await {
             Ok(0) | Err(_) => break,
@@ -325,8 +333,9 @@ async fn handle_websocket(
                 if let Ok(val) = serde_json::from_slice::<serde_json::Value>(&payload) {
                     let w = wda.clone();
                     let u = udid.clone();
+                    let g = gesture_state.clone();
                     tokio::spawn(async move {
-                        dispatch_ws_message(val, w, u, device_id).await;
+                        dispatch_ws_message(val, w, u, device_id, g).await;
                     });
                 }
             }
@@ -341,6 +350,7 @@ async fn dispatch_ws_message(
     wda: Arc<WdaClient>,
     udid: Arc<String>,
     device_id: u32,
+    gesture: Arc<tokio::sync::Mutex<GestureState>>,
 ) {
     let kind = val["kind"].as_str().unwrap_or_default().to_string();
     match kind.as_str() {
@@ -348,10 +358,8 @@ async fn dispatch_ws_message(
             if let Some(name) = val["name"].as_str() {
                 let name = name.to_string();
                 debug!("Received WS action: {}", name);
-                // 1. Try CoreDevice native hardware button
                 if let Err(e) = CoreDeviceHid::send_hardware_button((*udid).clone(), device_id, name.clone()).await {
                     debug!("CoreDevice hardware button failed ({:?}); trying WDA fallback", e);
-                    // 2. Fallback to WDA
                     match name.as_str() {
                         "home" => { let _ = wda.homescreen().await; }
                         "lock" => { let _ = wda.press_key("lock").await; }
@@ -364,8 +372,56 @@ async fn dispatch_ws_message(
         }
         "down" => {
             if let (Some(fx), Some(fy)) = (val["fx"].as_f64(), val["fy"].as_f64()) {
-                // Normalized coordinates to screen coordinates
-                let (x, y) = (fx as f32 * 390.0, fy as f32 * 844.0);
+                let (fx, fy) = (fx as f32, fy as f32);
+                let mut st = gesture.lock().await;
+                st.start = Some((fx, fy, std::time::Instant::now()));
+                st.last = (fx, fy);
+            }
+        }
+        "move" => {
+            if let (Some(fx), Some(fy)) = (val["fx"].as_f64(), val["fy"].as_f64()) {
+                let mut st = gesture.lock().await;
+                st.last = (fx as f32, fy as f32);
+            }
+        }
+        "release" => {
+            let (start_opt, last_pos) = {
+                let mut st = gesture.lock().await;
+                (st.start.take(), st.last)
+            };
+
+            if let Some((start_fx, start_fy, start_time)) = start_opt {
+                let (end_fx, end_fy) = if let (Some(x), Some(y)) = (val["fx"].as_f64(), val["fy"].as_f64()) {
+                    (x as f32, y as f32)
+                } else {
+                    last_pos
+                };
+
+                let dx = (end_fx - start_fx) * 390.0;
+                let dy = (end_fy - start_fy) * 844.0;
+                let dist = (dx * dx + dy * dy).sqrt();
+                let elapsed = start_time.elapsed().as_secs_f32();
+
+                if dist < 15.0 {
+                    let x = start_fx * 390.0;
+                    let y = start_fy * 844.0;
+                    debug!("📍 Gesture TAP at ({:.1}, {:.1})", x, y);
+                    let _ = wda.tap(x, y).await;
+                } else {
+                    let x1 = start_fx * 390.0;
+                    let y1 = start_fy * 844.0;
+                    let x2 = end_fx * 390.0;
+                    let y2 = end_fy * 844.0;
+                    let duration = elapsed.clamp(0.15, 0.6);
+                    debug!("📍 Gesture SWIPE from ({:.1}, {:.1}) to ({:.1}, {:.1}) duration {:.2}s", x1, y1, x2, y2, duration);
+                    let _ = wda.drag(x1, y1, x2, y2, duration).await;
+                }
+            }
+        }
+        "tap" => {
+            if let (Some(fx), Some(fy)) = (val["fx"].as_f64(), val["fy"].as_f64()) {
+                let x = fx as f32 * 390.0;
+                let y = fy as f32 * 844.0;
                 let _ = wda.tap(x, y).await;
             }
         }
@@ -399,28 +455,32 @@ async fn fetch_apps(udid: Arc<String>, device_id: u32) -> anyhow::Result<Vec<ser
         label: "meridian-hub".to_string(),
     };
 
-    let proxy = CoreDeviceProxy::connect(&provider).await?;
-    let rsd_port = proxy.tunnel_info().server_rsd_port;
-    let adapter = proxy.create_software_tunnel()?;
-    let mut handle = adapter.to_async_handle();
+    use idevice::services::installation_proxy::InstallationProxyClient;
 
-    let rsd_stream = handle.connect(rsd_port).await?;
-    let rsd = RsdHandshake::new(rsd_stream).await?;
-
-    let app_entry = rsd.services.get("com.apple.coredevice.appservice")
-        .ok_or_else(|| anyhow::anyhow!("AppService not found"))?;
-
-    let app_stream = handle.connect(app_entry.port).await?;
-    let mut app_service = AppServiceClient::new(app_stream).await?;
-
-    let list = app_service.list_apps(false, true, false, false, true).await?;
+    let mut inst = InstallationProxyClient::connect(&provider).await?;
+    let raw_apps = inst.get_apps(Some("User"), None).await?;
     let mut out = Vec::new();
-    for a in list {
+    for (bid, meta) in raw_apps {
+        let name = meta
+            .as_dictionary()
+            .and_then(|d| d.get("CFBundleDisplayName").or_else(|| d.get("CFBundleName")))
+            .and_then(|v| v.as_string())
+            .unwrap_or(&bid)
+            .to_string();
+
         out.push(serde_json::json!({
-            "bundleId": a.bundle_identifier,
-            "name": a.name,
+            "bundleId": bid,
+            "name": name,
         }));
     }
+
+    out.sort_by(|a, b| {
+        let na = a["name"].as_str().unwrap_or_default();
+        let nb = b["name"].as_str().unwrap_or_default();
+        na.cmp(nb)
+    });
+
+    info!("✓ Loaded {} user apps via InstallationProxy", out.len());
     Ok(out)
 }
 
@@ -461,6 +521,19 @@ async fn fetch_running_processes(udid: Arc<String>, device_id: u32) -> anyhow::R
 }
 
 async fn fetch_icon(udid: Arc<String>, device_id: u32, bundle_id: String) -> anyhow::Result<Vec<u8>> {
+    let cache_dir = dirs::cache_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join("meridian")
+        .join("icons");
+    let icon_file = cache_dir.join(format!("{}.png", bundle_id));
+    if icon_file.exists() {
+        if let Ok(bytes) = tokio::fs::read(&icon_file).await {
+            if !bytes.is_empty() {
+                return Ok(bytes);
+            }
+        }
+    }
+
     let provider = UsbmuxdProvider {
         addr: UsbmuxdAddr::default(),
         tag: 1,
@@ -471,6 +544,9 @@ async fn fetch_icon(udid: Arc<String>, device_id: u32, bundle_id: String) -> any
 
     let mut sb = SpringBoardServicesClient::connect(&provider).await?;
     let png = sb.get_icon_pngdata(bundle_id).await?;
+
+    let _ = std::fs::create_dir_all(&cache_dir);
+    let _ = tokio::fs::write(&icon_file, &png).await;
     Ok(png)
 }
 

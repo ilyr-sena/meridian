@@ -83,6 +83,10 @@ impl MeshSupervisor {
                 let mut cmd = Command::new(&bin_path);
                 cmd.arg("-dir").arg(&state_dir);
 
+                let machine_host = get_machine_hostname();
+                cmd.arg("-hostname").arg(&machine_host);
+                info!("Using Tailscale mesh node hostname: {}", machine_host);
+
                 if let Some(ref key) = auth_key {
                     cmd.arg("-authkey").arg(key);
                 }
@@ -214,4 +218,41 @@ fn find_mesh_binary() -> Option<PathBuf> {
     }
 
     which::which(binary_name).ok()
+}
+
+fn get_machine_hostname() -> String {
+    // 1. Try env HOSTNAME or COMPUTERNAME
+    if let Ok(h) = std::env::var("HOSTNAME") {
+        if !h.trim().is_empty() {
+            return sanitize_hostname(&format!("meridian-{}", h.trim()));
+        }
+    }
+    if let Ok(h) = std::env::var("COMPUTERNAME") {
+        if !h.trim().is_empty() {
+            return sanitize_hostname(&format!("meridian-{}", h.trim()));
+        }
+    }
+
+    // 2. Try /etc/hostname on Linux
+    if let Ok(h) = std::fs::read_to_string("/etc/hostname") {
+        if !h.trim().is_empty() {
+            return sanitize_hostname(&format!("meridian-{}", h.trim()));
+        }
+    }
+
+    "meridian-hub".to_string()
+}
+
+fn sanitize_hostname(s: &str) -> String {
+    let clean: String = s
+        .to_lowercase()
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '-')
+        .collect();
+    let trimmed = clean.trim_matches('-');
+    if trimmed.is_empty() {
+        "meridian-hub".to_string()
+    } else {
+        trimmed.to_string()
+    }
 }

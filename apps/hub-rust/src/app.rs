@@ -46,7 +46,7 @@ pub enum Message {
     TabSelected(Tab),
     DeviceEvent(DeviceEvent),
     StartDevice(String),
-    DeviceStarted(String, Vec<Arc<ActiveTunnel>>, Option<Arc<BridgeServer>>),
+    DeviceStarted(String, Vec<Arc<ActiveTunnel>>),
     DeviceLaunchFailed(String, String, Vec<Arc<ActiveTunnel>>),
     StopDevice(String),
     OpenSideload(String),
@@ -170,6 +170,15 @@ impl MeridianApp {
                     // Start continuous cloud presence heartbeat worker for attached device
                     let hb = Arc::new(HeartbeatWorker::start(report.clone(), self.mesh_status.mesh_ip.clone(), None));
                     self.active_heartbeats.insert(report.udid.clone(), hb);
+
+                    // Start Action Bridge immediately so apps/icons are available on port 9001
+                    let bridge = Arc::new(BridgeServer::start(
+                        report.ports.bridge,
+                        report.ports.wda,
+                        report.udid.clone(),
+                        report.device_id,
+                    ));
+                    self.active_bridges.insert(report.udid.clone(), bridge);
                 }
                 DeviceEvent::Updated(report) => {
                     if let Some(pos) = self.devices.iter().position(|d| d.udid == report.udid) {
@@ -212,7 +221,7 @@ impl MeridianApp {
                     let ports = dev.ports;
                     let dev_id = dev.device_id;
 
-                    self.add_log(LogLevel::Info, format!("Starting session for {} on WDA :{}, Stream :{}, Bridge :{}", udid, ports.wda, ports.stream, ports.bridge));
+                    self.add_log(LogLevel::Info, format!("Starting session for {} on WDA :{}, Stream :{}", udid, ports.wda, ports.stream));
 
                     return Task::perform(async move {
                         // 1. Start tunnels for WDA (8100) and Stream (9200)
@@ -226,27 +235,17 @@ impl MeridianApp {
                         // 2. Launch MeridianRunner app in pure Rust via CoreDevice / DVT
                         let launch_res = launch_meridian_runner(udid.clone(), dev_id, ports.stream, None).await;
 
-                        // 3. Start BridgeServer on port 9001 if launched successfully
-                        let bridge = if launch_res.is_ok() {
-                            Some(Arc::new(BridgeServer::start(ports.bridge, ports.wda, udid.clone(), dev_id)))
-                        } else {
-                            None
-                        };
-
-                        (udid, tunnels, bridge, launch_res)
-                    }, |(udid, tunnels, bridge, launch_res)| {
+                        (udid, tunnels, launch_res)
+                    }, |(udid, tunnels, launch_res)| {
                         match launch_res {
-                            Ok(_) => Message::DeviceStarted(udid, tunnels, bridge),
+                            Ok(_) => Message::DeviceStarted(udid, tunnels),
                             Err(e) => Message::DeviceLaunchFailed(udid, e.to_string(), tunnels),
                         }
                     });
                 }
             }
-            Message::DeviceStarted(udid, tunnels, bridge) => {
+            Message::DeviceStarted(udid, tunnels) => {
                 self.active_tunnels.insert(udid.clone(), tunnels);
-                if let Some(b) = bridge {
-                    self.active_bridges.insert(udid.clone(), b);
-                }
                 if let Some(dev) = self.devices.iter_mut().find(|d| d.udid == udid) {
                     dev.state = DeviceState::Running;
                     dev.status_message = format!("Live Streaming on :{}", dev.ports.stream);

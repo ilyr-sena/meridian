@@ -163,9 +163,22 @@ impl WdaClient {
         Ok(())
     }
 
-    /// Tap coordinates using WDA touch/perform API.
+    /// Tap coordinates using WDA tap / touch API.
     pub async fn tap(&self, x: f32, y: f32) -> anyhow::Result<()> {
         let sid = self.get_session_id().await?;
+        let tap_url = format!("{}/session/{}/wda/tap", self.base_url, sid);
+        let resp = self.http.post(&tap_url).json(&serde_json::json!({
+            "x": x,
+            "y": y
+        })).send().await;
+
+        if let Ok(r) = resp {
+            if r.status().is_success() {
+                return Ok(());
+            }
+        }
+
+        // Fallback to touch/perform
         let url = format!("{}/session/{}/wda/touch/perform", self.base_url, sid);
         let payload = serde_json::json!({
             "actions": [
@@ -176,6 +189,39 @@ impl WdaClient {
         });
 
         self.http.post(&url).json(&payload).send().await?.error_for_status()?;
+        Ok(())
+    }
+
+    /// Drag / swipe from (x1, y1) to (x2, y2) over duration in seconds.
+    pub async fn drag(&self, x1: f32, y1: f32, x2: f32, y2: f32, duration: f32) -> anyhow::Result<()> {
+        let sid = self.get_session_id().await?;
+        let url = format!("{}/session/{}/wda/dragfromtoforduration", self.base_url, sid);
+        let payload = serde_json::json!({
+            "fromX": x1,
+            "fromY": y1,
+            "toX": x2,
+            "toY": y2,
+            "duration": duration
+        });
+
+        let resp = self.http.post(&url).json(&payload).send().await;
+        if let Ok(r) = resp {
+            if r.status().is_success() {
+                return Ok(());
+            }
+        }
+
+        // Fallback to touch/perform with moveTo
+        let touch_url = format!("{}/session/{}/wda/touch/perform", self.base_url, sid);
+        let touch_payload = serde_json::json!({
+            "actions": [
+                { "action": "press", "options": { "x": x1, "y": y1 } },
+                { "action": "wait", "options": { "ms": 50 } },
+                { "action": "moveTo", "options": { "x": x2, "y": y2 } },
+                { "action": "release" }
+            ]
+        });
+        self.http.post(&touch_url).json(&touch_payload).send().await?.error_for_status()?;
         Ok(())
     }
 
