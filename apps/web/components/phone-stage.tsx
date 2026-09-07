@@ -580,6 +580,7 @@ export function PhoneStage({ className }: { className?: string }) {
   }, [loadApps])
   const [streamUrl, setStreamUrl] = useState("")
   const [streamStatus, setStreamStatus] = useState<StreamStatus>("connecting")
+  const [streamStats, setStreamStats] = useState<StreamStats | null>(null)
   const controlWsRef = useRef<WebSocket | null>(null)
   const [controlReady, setControlReady] = useState(false)
   const [activeAction, setActiveAction] = useState<string | null>(null)
@@ -1080,6 +1081,7 @@ export function PhoneStage({ className }: { className?: string }) {
                   wsUrl={activeEndpoints.streamWs}
                   fallbackUrl={streamUrl}
                   onStatusChange={setStreamStatus}
+                  onStatsUpdate={setStreamStats}
                 />
                 {/* Invisible gesture pad — streams normalized coords to the HID
               bridge or directly to WDA */}
@@ -1099,10 +1101,32 @@ export function PhoneStage({ className }: { className?: string }) {
             </div>
             {/* Floating top bar card */}
             <div className="absolute -top-[4.5rem] left-0 z-0 flex h-14 w-full items-center justify-between rounded-[32px] border border-white/5 bg-secondary pr-3 pl-6 shadow-xl shadow-primary/5">
-              <div className="w-[calc(100%-90px)]s flex flex-col gap-0">
-                <span className="truncate text-xs font-medium">
-                  {activeDevice?.name ?? dbUser?.team?.name ?? "No device"}
-                </span>
+              <div className="flex flex-col gap-0.5 min-w-0 pr-2">
+                <div className="flex items-center gap-2">
+                  <span className="truncate text-xs font-medium">
+                    {activeDevice?.name ?? dbUser?.team?.name ?? "No device"}
+                  </span>
+                  {streamStats && (
+                    <span
+                      className={cn(
+                        "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-mono select-none border whitespace-nowrap",
+                        streamStats.codec.includes("(gpu)")
+                          ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20"
+                          : "bg-amber-500/10 text-amber-400 border-amber-500/20"
+                      )}
+                    >
+                      <span
+                        className={cn(
+                          "h-1.5 w-1.5 rounded-full",
+                          streamStats.codec.includes("(gpu)")
+                            ? "bg-emerald-400 animate-pulse"
+                            : "bg-amber-400"
+                        )}
+                      />
+                      {streamStats.codec} • {streamStats.fps} fps
+                    </span>
+                  )}
+                </div>
                 <span className="truncate text-[0.6875rem] text-muted-foreground">
                   {activeDevice
                     ? `${activeDevice.model} \u2022 ${activeDevice.version}`

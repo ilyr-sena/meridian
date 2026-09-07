@@ -817,16 +817,29 @@ extension H264Stream {
     });
 
     try {
-      const desc = Uint8Array.from(atob(m.avcC), ch => ch.charCodeAt(0));
-      webCodecsDecoder.configure({
-        codec: m.codec,
-        description: desc,
-        optimizeForLatency: true
-      });
+      const rawBytes = Uint8Array.from(atob(m.avcC), ch => ch.charCodeAt(0));
+      const desc = (rawBytes.length > 8 && rawBytes[4] === 0x61 && rawBytes[5] === 0x76 && rawBytes[6] === 0x63 && rawBytes[7] === 0x43)
+        ? rawBytes.subarray(8)
+        : rawBytes;
+      const codec = (m.codec || 'avc1.64002a').toLowerCase();
+      try {
+        webCodecsDecoder.configure({
+          codec: codec,
+          description: desc,
+          hardwareAcceleration: 'prefer-hardware',
+          optimizeForLatency: true
+        });
+      } catch(e1) {
+        webCodecsDecoder.configure({
+          codec: codec,
+          description: desc,
+          hardwareAcceleration: 'prefer-hardware'
+        });
+      }
       c.style.display = 'block';
       v.style.display = 'none';
       statLive.classList.add('live');
-      document.getElementById('statCodec').textContent = m.codec + ' (gpu)';
+      document.getElementById('statCodec').textContent = codec + ' (gpu)';
     } catch(e) {
       console.warn('WebCodecs config failed:', e);
       fallbackToMSE(m);
@@ -906,7 +919,8 @@ extension H264Stream {
   // ---- websocket -----------------------------------------------------------
   function connect() {
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-    ws = new WebSocket(proto + '://' + location.host + '/stream.ws');
+    const wsPath = location.pathname.replace(/\/+$/, '') + '/stream.ws';
+    ws = new WebSocket(proto + '://' + location.host + wsPath);
     ws.binaryType = 'arraybuffer';
 
     ws.onopen = () => {

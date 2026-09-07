@@ -168,7 +168,7 @@ export const H264StreamPlayer = memo(function H264StreamPlayer({
       }
     }
 
-    function initWebCodecs(m: { codec: string; avcC: string }) {
+    function initWebCodecs(m: { codec: string; avcC?: string }) {
       const canvas = canvasRef.current
       if (!canvas || !hasWebCodecs) {
         initMSE(`video/mp4; codecs="${m.codec}"`)
@@ -194,6 +194,44 @@ export const H264StreamPlayer = memo(function H264StreamPlayer({
       ctx2d.imageSmoothingEnabled = true
       ctx2d.imageSmoothingQuality = "high"
 
+      const rawCodec = m.codec || "avc1.64002a"
+      const codec = rawCodec.toLowerCase()
+
+      // Parse and clean AVCDecoderConfigurationRecord
+      let desc: Uint8Array | undefined
+      if (m.avcC) {
+        try {
+          const rawAvcC = atob(m.avcC)
+          const rawBytes = new Uint8Array(rawAvcC.length)
+          for (let i = 0; i < rawAvcC.length; i++) {
+            rawBytes[i] = rawAvcC.charCodeAt(i)
+          }
+
+          // Strip 8-byte box header if present (4 bytes size + "avcC")
+          if (
+            rawBytes.length > 8 &&
+            rawBytes[4] === 0x61 &&
+            rawBytes[5] === 0x76 &&
+            rawBytes[6] === 0x63 &&
+            rawBytes[7] === 0x43
+          ) {
+            desc = rawBytes.subarray(8)
+          } else if (rawBytes[0] === 1) {
+            desc = rawBytes
+          } else {
+            // Find 0x01 configurationVersion
+            const idx = rawBytes.indexOf(1)
+            if (idx !== -1 && idx + 6 < rawBytes.length) {
+              desc = rawBytes.subarray(idx)
+            } else {
+              desc = rawBytes
+            }
+          }
+        } catch (e) {
+          console.warn("[Meridian] Could not parse avcC:", e)
+        }
+      }
+
       const VideoDecoderClass = (window as any).VideoDecoder
       const decoder = new VideoDecoderClass({
         output: (frame: any) => {
@@ -207,41 +245,67 @@ export const H264StreamPlayer = memo(function H264StreamPlayer({
           setStreamStatus("loaded")
         },
         error: (err: any) => {
-          console.warn("[Meridian] WebCodecs decode warning:", err)
+          console.warn("[Meridian] WebCodecs decode warning (will resync on next IDR):", err)
           s.hasSeenKeyFrame = false
         },
       })
 
-      try {
-        const rawAvcC = atob(m.avcC)
-        const desc = new Uint8Array(rawAvcC.length)
-        for (let i = 0; i < rawAvcC.length; i++) {
-          desc[i] = rawAvcC.charCodeAt(i)
-        }
+      // Multi-tier configuration: prefer hardware & low-latency, with graceful fallback
+      let configured = false
 
+      if (desc && desc.length > 0) {
         try {
           decoder.configure({
-            codec: m.codec,
+            codec,
             description: desc,
             hardwareAcceleration: "prefer-hardware",
             optimizeForLatency: true,
           })
+          configured = true
         } catch {
-          // If optimizeForLatency is unsupported in this browser engine, fallback to prefer-hardware
-          decoder.configure({
-            codec: m.codec,
-            description: desc,
-            hardwareAcceleration: "prefer-hardware",
-          })
+          try {
+            decoder.configure({
+              codec,
+              description: desc,
+              hardwareAcceleration: "prefer-hardware",
+            })
+            configured = true
+          } catch {
+            try {
+              decoder.configure({ codec, description: desc })
+              configured = true
+            } catch {
+              console.warn("[Meridian] Config with description failed; attempting in-band config...")
+            }
+          }
         }
+      }
 
+      if (!configured) {
+        try {
+          decoder.configure({
+            codec,
+            hardwareAcceleration: "prefer-hardware",
+            optimizeForLatency: true,
+          })
+          configured = true
+        } catch {
+          try {
+            decoder.configure({ codec })
+            configured = true
+          } catch (e) {
+            console.error("[Meridian] All WebCodecs configurations failed:", e)
+          }
+        }
+      }
+
+      if (configured) {
         s.decoder = decoder
         s.hasSeenKeyFrame = false
-        s.codecStr = `${m.codec} (gpu)`
+        s.codecStr = `${codec} (gpu)`
         setRenderMode("webcodecs")
-      } catch (e) {
-        console.warn("[Meridian] WebCodecs config failed, switching to MSE:", e)
-        initMSE(`video/mp4; codecs="${m.codec}"`)
+      } else {
+        initMSE(`video/mp4; codecs="${codec}"`)
         setRenderMode("mse")
       }
     }
@@ -351,7 +415,7 @@ export const H264StreamPlayer = memo(function H264StreamPlayer({
                 s.decoder.decode(
                   new EncodedVideoChunkClass({
                     type: isKey ? "key" : "delta",
-                    timestamp: performance.now() * 1000,
+                    timestamp: Math.round(performance.now() * 1000),
                     data: naluData,
                   })
                 )
@@ -363,11 +427,13 @@ export const H264StreamPlayer = memo(function H264StreamPlayer({
             }
           }
 
-          // MSE Fallback path
-          s.fpsCount++
-          s.pendingBuffers.push(data)
-          drainMSE()
-          setStreamStatus("loaded")
+          // MSE Fallback path — strictly only if WebCodecs is unavailable
+          if (renderMode === "mse" || !hasWebCodecs) {
+            s.fpsCount++
+            s.pendingBuffers.push(data)
+            drainMSE()
+            setStreamStatus("loaded")
+          }
         }
       }
     }
