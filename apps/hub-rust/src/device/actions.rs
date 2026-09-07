@@ -84,12 +84,18 @@ impl WdaClient {
 
         info!("Created WDA session: {}", sid);
 
-        // Best effort: set waitForIdleTimeout=0 for low-latency touch actions
+        // Best effort: set waitForIdleTimeout=0 and animationCoolOffTimeout=0 for ultra-low latency touch actions
         let settings_url = format!("{}/session/{}/appium/settings", self.base_url, sid);
         let _ = self
             .http
             .post(&settings_url)
-            .json(&serde_json::json!({ "settings": { "waitForIdleTimeout": 0 } }))
+            .json(&serde_json::json!({
+                "settings": {
+                    "waitForIdleTimeout": 0,
+                    "animationCoolOffTimeout": 0,
+                    "snapshotTimeout": 0,
+                }
+            }))
             .send()
             .await;
 

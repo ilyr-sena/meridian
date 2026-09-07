@@ -407,6 +407,17 @@ export function PhoneStage({ className }: { className?: string }) {
   const sessionDeviceId = activeSession?.devices?.[0] ?? null
   const activeDevice = dbDevices.find((d) => d._id === sessionDeviceId) ?? null
 
+  const isDeviceActive = useMemo(() => {
+    return (
+      !!activeSession &&
+      activeSession.status === "active" &&
+      !!activeDevice &&
+      activeDevice.status === "online" &&
+      !!activeDevice.host_ports &&
+      typeof activeDevice.host_ports.stream === "number"
+    )
+  }, [activeSession, activeDevice])
+
   const activeEndpoints = useMemo(() => {
     const isLocal =
       typeof window !== "undefined" &&
@@ -697,13 +708,23 @@ export function PhoneStage({ className }: { className?: string }) {
     return () => clearTimeout(timeout)
   }, [activeEndpoints.streamBase, quality, fps, scale])
 
-  // Control bridge (hid_test.py on :9001) — auto-reconnects while the
-  // bridge is down; actions are dropped with a console warning until open.
+  // Control bridge (port 9001) — auto-reconnects while device is active;
+  // cleanly terminates and closes when session stops.
   useEffect(() => {
+    if (!isDeviceActive) {
+      if (controlWsRef.current) {
+        controlWsRef.current.close()
+        controlWsRef.current = null
+      }
+      setControlReady(false)
+      setIsAppsOpen(false)
+      return
+    }
+
     let closed = false
     let retry: ReturnType<typeof setTimeout>
     function connect() {
-      if (closed) return
+      if (closed || !isDeviceActive) return
       const ws = new WebSocket(activeEndpoints.controlWs)
       controlWsRef.current = ws
       ws.onopen = () => {
@@ -711,7 +732,7 @@ export function PhoneStage({ className }: { className?: string }) {
       }
       ws.onclose = () => {
         setControlReady(false)
-        if (!closed) retry = setTimeout(connect, 200)
+        if (!closed && isDeviceActive) retry = setTimeout(connect, 500)
       }
       ws.onerror = () => ws.close()
     }
@@ -720,10 +741,12 @@ export function PhoneStage({ className }: { className?: string }) {
       closed = true
       clearTimeout(retry)
       controlWsRef.current?.close()
+      controlWsRef.current = null
     }
-  }, [activeEndpoints.controlWs, activeDevice?.status])
+  }, [activeEndpoints.controlWs, isDeviceActive])
 
   async function sendAction(name: string) {
+    if (!isDeviceActive) return
     setActiveAction(name)
     setTimeout(() => setActiveAction((cur) => (cur === name ? null : cur)), 300)
     const ws = controlWsRef.current
@@ -1002,7 +1025,7 @@ export function PhoneStage({ className }: { className?: string }) {
     >
       <AnimatePresence mode="wait">
         {/* Empty state — shown when no active session */}
-        {!activeSession && (
+        {!isDeviceActive && (
           <motion.div
             key="empty"
             initial={{ opacity: 0, scale: 0.95 }}
@@ -1041,7 +1064,7 @@ export function PhoneStage({ className }: { className?: string }) {
           </motion.div>
         )}
         {/* Phone + floating cards — shown when session is active */}
-        {activeSession && (
+        {isDeviceActive && (
           <motion.div
             key="phone"
             initial={{ opacity: 0, scale: 0.95, y: 10 }}

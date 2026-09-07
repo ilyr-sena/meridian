@@ -41,7 +41,7 @@ export async function POST(req: NextRequest) {
       if (model) updateDoc.model = model
       if (version) updateDoc.version = version
       if (tailscale_ip) updateDoc.tailscale_ip = tailscale_ip
-      if (host_ports) updateDoc.host_ports = host_ports
+      if (host_ports !== undefined) updateDoc.host_ports = host_ports
       if (Array.isArray(apps) && apps.length > 0) updateDoc.apps = apps
       if (!device.team) {
         const teamsCol = db.collection<MongoTeam>("teams")
@@ -53,6 +53,14 @@ export async function POST(req: NextRequest) {
         { _id: device._id },
         { $set: updateDoc }
       )
+
+      // Terminate any active session if explicitly requested or device went offline / stopped session
+      if (body.end_active_session || body.session_state === "ended" || status === "offline") {
+        await db.collection("sessions").updateMany(
+          { devices: device._id, status: "active" },
+          { $set: { status: "ended", ended: now, end_reason: body.end_reason || "hub_stopped" } }
+        )
+      }
 
       return NextResponse.json({
         success: true,
@@ -76,7 +84,7 @@ export async function POST(req: NextRequest) {
       users: [],
       apps: Array.isArray(apps) ? apps : [],
       tailscale_ip,
-      host_ports: host_ports || { wda: 8100, bridge: 9001, stream: 9200 },
+      host_ports: host_ports ?? null,
       last_heartbeat: now,
     }
 

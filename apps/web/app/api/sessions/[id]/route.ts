@@ -81,6 +81,14 @@ export async function PATCH(
           { $set: { status: "ended", ended: now, end_reason: body.end_reason ?? "user" } }
         )
 
+      // Clear host_ports on all devices that were active in this session
+      if (session.devices && session.devices.length > 0) {
+        await db.collection("devices").updateMany(
+          { _id: { $in: session.devices } },
+          { $set: { host_ports: null } }
+        )
+      }
+
       return NextResponse.json({
         _id: String(session._id),
         id: session.id,

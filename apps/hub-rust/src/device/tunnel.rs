@@ -96,7 +96,7 @@ pub async fn connect_usbmuxd() -> std::io::Result<UsbmuxStream> {
 pub struct ActiveTunnel {
     pub local_port: u16,
     pub device_port: u16,
-    shutdown_tx: Option<oneshot::Sender<()>>,
+    shutdown_tx: std::sync::Mutex<Option<oneshot::Sender<()>>>,
     is_alive: Arc<AtomicBool>,
 }
 
@@ -105,11 +105,19 @@ impl ActiveTunnel {
         self.is_alive.load(Ordering::SeqCst)
     }
 
-    pub fn stop(&mut self) {
-        if let Some(tx) = self.shutdown_tx.take() {
-            let _ = tx.send(());
+    pub fn stop(&self) {
+        if let Ok(mut lock) = self.shutdown_tx.lock() {
+            if let Some(tx) = lock.take() {
+                let _ = tx.send(());
+            }
         }
         self.is_alive.store(false, Ordering::SeqCst);
+    }
+}
+
+impl Drop for ActiveTunnel {
+    fn drop(&mut self) {
+        self.stop();
     }
 }
 
@@ -159,7 +167,7 @@ pub async fn start_tunnel(
     Ok(ActiveTunnel {
         local_port,
         device_port,
-        shutdown_tx: Some(shutdown_tx),
+        shutdown_tx: std::sync::Mutex::new(Some(shutdown_tx)),
         is_alive,
     })
 }

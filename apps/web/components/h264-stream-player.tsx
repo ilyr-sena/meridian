@@ -46,6 +46,7 @@ export const H264StreamPlayer = memo(function H264StreamPlayer({
     latencyMs: 0,
     codecStr: "h264",
     unmounted: false,
+    hasSeenKeyFrame: false,
   })
 
   useEffect(() => {
@@ -206,9 +207,8 @@ export const H264StreamPlayer = memo(function H264StreamPlayer({
           setStreamStatus("loaded")
         },
         error: (err: any) => {
-          console.warn("[Meridian] WebCodecs decode error, switching to MSE:", err)
-          initMSE(`video/mp4; codecs="${m.codec}"`)
-          setRenderMode("mse")
+          console.warn("[Meridian] WebCodecs decode warning:", err)
+          s.hasSeenKeyFrame = false
         },
       })
 
@@ -219,13 +219,24 @@ export const H264StreamPlayer = memo(function H264StreamPlayer({
           desc[i] = rawAvcC.charCodeAt(i)
         }
 
-        decoder.configure({
-          codec: m.codec,
-          description: desc,
-          optimizeForLatency: true,
-        })
+        try {
+          decoder.configure({
+            codec: m.codec,
+            description: desc,
+            hardwareAcceleration: "prefer-hardware",
+            optimizeForLatency: true,
+          })
+        } catch {
+          // If optimizeForLatency is unsupported in this browser engine, fallback to prefer-hardware
+          decoder.configure({
+            codec: m.codec,
+            description: desc,
+            hardwareAcceleration: "prefer-hardware",
+          })
+        }
 
         s.decoder = decoder
+        s.hasSeenKeyFrame = false
         s.codecStr = `${m.codec} (gpu)`
         setRenderMode("webcodecs")
       } catch (e) {
@@ -329,6 +340,12 @@ export const H264StreamPlayer = memo(function H264StreamPlayer({
                 pos += 4 + nalLen
               }
 
+              // WebCodecs specification: drop initial delta chunks until first keyframe arrives
+              if (!isKey && !s.hasSeenKeyFrame) {
+                return
+              }
+              s.hasSeenKeyFrame = true
+
               const EncodedVideoChunkClass = (window as any).EncodedVideoChunk
               try {
                 s.decoder.decode(
@@ -340,6 +357,7 @@ export const H264StreamPlayer = memo(function H264StreamPlayer({
                 )
               } catch (e) {
                 console.warn("[Meridian] decode frame error:", e)
+                s.hasSeenKeyFrame = false
               }
               return
             }

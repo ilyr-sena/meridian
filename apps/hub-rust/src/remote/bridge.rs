@@ -412,7 +412,7 @@ async fn dispatch_ws_message(
                     let y1 = start_fy * 844.0;
                     let x2 = end_fx * 390.0;
                     let y2 = end_fy * 844.0;
-                    let duration = elapsed.clamp(0.15, 0.6);
+                    let duration = elapsed.clamp(0.08, 0.35);
                     debug!("📍 Gesture SWIPE from ({:.1}, {:.1}) to ({:.1}, {:.1}) duration {:.2}s", x1, y1, x2, y2, duration);
                     let _ = wda.drag(x1, y1, x2, y2, duration).await;
                 }

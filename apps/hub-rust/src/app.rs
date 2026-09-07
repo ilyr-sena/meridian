@@ -19,7 +19,7 @@ use crate::device::models::{DeviceReport, DeviceState};
 use crate::device::monitor::{DeviceEvent, DeviceMonitor};
 use crate::device::tunnel::{start_tunnel, ActiveTunnel};
 use crate::remote::bridge::BridgeServer;
-use crate::remote::heartbeat::{send_offline_sync, HeartbeatWorker};
+use crate::remote::heartbeat::{send_offline_sync, sync_session_state, HeartbeatWorker};
 use crate::remote::key_fetcher::KeyFetcher;
 use crate::remote::mesh::{MeshStatus, MeshSupervisor};
 use crate::sideload::sideloader::{SideloadOptions, Sideloader};
@@ -81,6 +81,7 @@ pub struct MeridianApp {
     active_tunnels: HashMap<String, Vec<Arc<ActiveTunnel>>>,
     active_heartbeats: HashMap<String, Arc<HeartbeatWorker>>,
     active_bridges: HashMap<String, Arc<BridgeServer>>,
+    shared_mesh_ip: Arc<std::sync::RwLock<Option<String>>>,
     slot_mgr: SlotManager,
     vault: Vault,
     mesh_supervisor: Arc<MeshSupervisor>,
@@ -122,12 +123,15 @@ impl MeridianApp {
             is_busy: false,
         };
 
+        let shared_mesh_ip = Arc::new(std::sync::RwLock::new(None));
+
         let app = Self {
             active_tab: Tab::Devices,
             devices: Vec::new(),
             active_tunnels: HashMap::new(),
             active_heartbeats: HashMap::new(),
             active_bridges: HashMap::new(),
+            shared_mesh_ip,
             slot_mgr,
             vault,
             mesh_supervisor,
@@ -168,7 +172,13 @@ impl MeridianApp {
                         self.devices.push(report.clone());
                     }
                     // Start continuous cloud presence heartbeat worker for attached device
-                    let hb = Arc::new(HeartbeatWorker::start(report.clone(), self.mesh_status.mesh_ip.clone(), None));
+                    let session_active = Arc::new(std::sync::atomic::AtomicBool::new(false));
+                    let hb = Arc::new(HeartbeatWorker::start(
+                        report.clone(),
+                        self.shared_mesh_ip.clone(),
+                        session_active,
+                        None,
+                    ));
                     self.active_heartbeats.insert(report.udid.clone(), hb);
 
                     // Start Action Bridge immediately so apps/icons are available on port 9001
@@ -249,6 +259,15 @@ impl MeridianApp {
                 if let Some(dev) = self.devices.iter_mut().find(|d| d.udid == udid) {
                     dev.state = DeviceState::Running;
                     dev.status_message = format!("Live Streaming on :{}", dev.ports.stream);
+                    let ports = dev.ports;
+                    let udid_clone = udid.clone();
+                    let mesh_ip = self.shared_mesh_ip.read().ok().and_then(|g| g.clone());
+                    if let Some(hb) = self.active_heartbeats.get(&udid) {
+                        hb.set_session_active(true);
+                    }
+                    tokio::spawn(async move {
+                        sync_session_state(&udid_clone, true, Some(ports), mesh_ip, None).await;
+                    });
                 }
                 self.add_log(LogLevel::Info, format!("✓ Meridian session LIVE for {}", udid));
             }
@@ -261,9 +280,16 @@ impl MeridianApp {
             }
             Message::StopDevice(udid) => {
                 self.add_log(LogLevel::Info, format!("Stopping session for {}", udid));
-                self.active_tunnels.remove(&udid);
+                if let Some(tunnels) = self.active_tunnels.remove(&udid) {
+                    for t in tunnels {
+                        t.stop();
+                    }
+                }
                 if let Some(b) = self.active_bridges.remove(&udid) {
                     b.stop();
+                }
+                if let Some(hb) = self.active_heartbeats.get(&udid) {
+                    hb.set_session_active(false);
                 }
                 if let Some(dev) = self.devices.iter_mut().find(|d| d.udid == udid) {
                     dev.state = DeviceState::Ready;
@@ -271,10 +297,13 @@ impl MeridianApp {
                 }
                 let dev_id = self.devices.iter().find(|d| d.udid == udid).map(|d| d.device_id).unwrap_or(0);
                 let udid_clone = udid.clone();
+                let mesh_ip = self.shared_mesh_ip.read().ok().and_then(|g| g.clone());
                 return Task::perform(async move {
-                    // Close the iOS runner app via CoreDevice
+                    // 1. Immediately inform cloud database that session stopped & clear host_ports
+                    sync_session_state(&udid_clone, false, None, mesh_ip, None).await;
+                    // 2. Close the iOS runner app via CoreDevice
                     let _ = kill_meridian_runner(udid_clone, dev_id, None).await;
-                    // Navigate to homescreen via WDA
+                    // 3. Navigate to homescreen via WDA
                     let wda = WdaClient::new("http://127.0.0.1:8100");
                     let _ = wda.homescreen().await;
                 }, |_| Message::Tick);
@@ -405,6 +434,9 @@ impl MeridianApp {
                 }, Message::MeshUpdated);
             }
             Message::MeshUpdated(status) => {
+                if let Ok(mut lock) = self.shared_mesh_ip.write() {
+                    *lock = status.mesh_ip.clone();
+                }
                 self.mesh_status = status;
             }
             Message::TitleAction(action) => match action {
