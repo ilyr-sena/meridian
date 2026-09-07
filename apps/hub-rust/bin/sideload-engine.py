@@ -3,13 +3,57 @@
 Signs IPA using Apple Developer Services and installs over USB via usbmuxd.
 """
 import sys
+import os
 import argparse
-import json
 from pathlib import Path
 
-# Add python source paths
-ROOT = Path(__file__).resolve().parent.parent.parent
-sys.path.insert(0, str(ROOT / "apps" / "hub" / "src"))
+# 1. Dependency check & automatic re-execution with virtualenv if missing
+try:
+    import srp
+    import pymobiledevice3
+except ImportError:
+    home = Path.home()
+    venv_pythons = [
+        home / "provision-venv" / "bin" / "python3",
+        home / "provision-venv" / "bin" / "python",
+        home / "provision-venv" / "Scripts" / "python.exe",
+        Path("apps/hub/.venv/bin/python"),
+        Path("apps/hub/.venv/Scripts/python.exe"),
+        Path(".venv/bin/python"),
+        Path(".venv/Scripts/python.exe"),
+    ]
+    for vp in venv_pythons:
+        if vp.is_file() and os.access(vp, os.X_OK):
+            if os.environ.get("_MERIDIAN_REEXEC") != "1":
+                os.environ["_MERIDIAN_REEXEC"] = "1"
+                os.execv(str(vp), [str(vp)] + sys.argv)
+
+# 2. Add search paths for meridian_py
+current = Path(__file__).resolve().parent
+candidates = [
+    current,                          # e.g. dist/bin (where meridian_py was copied)
+    current.parent,                   # e.g. dist
+    current / "meridian_py",
+]
+
+# Walk up up to 6 parent directories to locate apps/hub/src
+walker = current
+for _ in range(6):
+    candidates.append(walker / "apps" / "hub" / "src")
+    candidates.append(walker / "src")
+    walker = walker.parent
+
+for c in candidates:
+    if (c / "meridian_py").is_dir():
+        if str(c) not in sys.path:
+            sys.path.insert(0, str(c))
+        break
+
+try:
+    from meridian_py.sideload import sideload_app
+except ImportError as err:
+    print(f"[ERROR] Failed to load sideload engine module: {err}", flush=True)
+    sys.exit(1)
 
 def main():
     parser = argparse.ArgumentParser(description="Meridian Sideload Engine")
@@ -21,11 +65,6 @@ def main():
     args = parser.parse_args()
 
     print("[PROGRESS:10] Connecting to Apple authentication service...", flush=True)
-
-    from meridian_py.sideload import sideload_app
-
-    def on_progress(pct, msg):
-        print(f"[PROGRESS:{pct}] {msg}", flush=True)
 
     try:
         print("[PROGRESS:25] Provisioning development certificate...", flush=True)
@@ -49,3 +88,4 @@ def main():
 
 if __name__ == "__main__":
     sys.exit(main())
+

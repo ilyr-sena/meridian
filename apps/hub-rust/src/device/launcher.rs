@@ -4,7 +4,7 @@
 //! (e.g. untrusted profile, developer mode required).
 
 use std::time::Duration;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, info, warn};
 
 pub const DEFAULT_RUNNER_BUNDLE: &str = "dev.ius.meridian.runner.xctrunner.SRTHYBYH35";
 
@@ -68,7 +68,7 @@ pub async fn kill_meridian_runner(udid: &str) -> anyhow::Result<()> {
 }
 
 async fn invoke_coredevice_launch(udid: &str, bundle_id: &str) -> anyhow::Result<()> {
-    debug!("Invoking CoreDevice launch for {}", bundle_id);
+    debug!("Invoking CoreDevice launch for {} on {}", bundle_id, udid);
 
     // Call python3 / pymobiledevice3 core-device launch-application with --userspace
     let mut cmd = tokio::process::Command::new("python3");
@@ -77,6 +77,7 @@ async fn invoke_coredevice_launch(udid: &str, bundle_id: &str) -> anyhow::Result
         "developer", "core-device", "launch-application",
         bundle_id, "",
         "--userspace",
+        "--tunnel", udid,
     ]);
 
     #[cfg(windows)]

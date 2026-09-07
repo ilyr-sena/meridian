@@ -2,11 +2,11 @@
 //!
 //! Provides native file picking via `rfd` and real-time execution with progress reporting.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::Stdio;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info};
 
 #[derive(Debug, Clone)]
 pub struct SideloadOptions {
@@ -142,17 +142,41 @@ fn find_sideload_engine() -> Option<PathBuf> {
 }
 
 fn find_python_executable() -> String {
-    // 1. Check local virtualenv in apps/hub/.venv
-    let venv_python = if cfg!(windows) {
-        PathBuf::from("apps/hub/.venv/Scripts/python.exe")
-    } else {
-        PathBuf::from("apps/hub/.venv/bin/python")
-    };
-    if venv_python.exists() {
-        return venv_python.to_string_lossy().to_string();
+    // 1. Check user provision-venv (preferred on Linux/Windows developer machines)
+    if let Some(home) = dirs::home_dir() {
+        let venv_candidates = [
+            home.join("provision-venv/bin/python3"),
+            home.join("provision-venv/bin/python"),
+            home.join("provision-venv/Scripts/python.exe"),
+        ];
+        for candidate in venv_candidates {
+            if candidate.exists() {
+                return candidate.to_string_lossy().to_string();
+            }
+        }
     }
 
-    // 2. Check system python3 / python
+    // 2. Check local virtualenv in apps/hub/.venv or .venv
+    let venv_candidates = if cfg!(windows) {
+        vec![
+            PathBuf::from("apps/hub/.venv/Scripts/python.exe"),
+            PathBuf::from(".venv/Scripts/python.exe"),
+        ]
+    } else {
+        vec![
+            PathBuf::from("apps/hub/.venv/bin/python3"),
+            PathBuf::from("apps/hub/.venv/bin/python"),
+            PathBuf::from(".venv/bin/python3"),
+            PathBuf::from(".venv/bin/python"),
+        ]
+    };
+    for candidate in venv_candidates {
+        if candidate.exists() {
+            return candidate.to_string_lossy().to_string();
+        }
+    }
+
+    // 3. Check system python3 / python
     if which::which("python3").is_ok() {
         return "python3".to_string();
     }

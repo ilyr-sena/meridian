@@ -9,9 +9,9 @@ use iced::{
     window, Element, Length, Subscription, Task,
 };
 use tokio::sync::mpsc;
-use tracing::{info, warn};
+use tracing::info;
 
-use crate::core::slots::{DevicePorts, SlotManager};
+use crate::core::slots::SlotManager;
 use crate::core::vault::Vault;
 use crate::device::launcher::{kill_meridian_runner, launch_meridian_runner};
 use crate::device::models::{DeviceReport, DeviceState};
@@ -173,11 +173,7 @@ impl MeridianApp {
                     info!("Device detached in UI: {}", udid);
                     self.add_log(LogLevel::Warn, format!("Detached iPhone: {}", udid));
                     self.devices.retain(|d| d.udid != udid);
-                    if let Some(tunnels) = self.active_tunnels.remove(&udid) {
-                        for t in &tunnels {
-                            // Tunnels dropped
-                        }
-                    }
+                    self.active_tunnels.remove(&udid);
                     self.active_heartbeats.remove(&udid);
                 }
             },
@@ -243,7 +239,7 @@ impl MeridianApp {
                 }
                 self.add_log(LogLevel::Info, format!("✓ Meridian session LIVE for {}", udid));
             }
-            Message::DeviceLaunchFailed(udid, err, tunnels) => {
+            Message::DeviceLaunchFailed(udid, err, _tunnels) => {
                 if let Some(dev) = self.devices.iter_mut().find(|d| d.udid == udid) {
                     dev.state = DeviceState::Error;
                     dev.status_message = err.clone();
