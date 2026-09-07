@@ -209,8 +209,8 @@ impl MeridianApp {
                         if let Ok(t) = wda_tun { tunnels.push(Arc::new(t)); }
                         if let Ok(t) = stream_tun { tunnels.push(Arc::new(t)); }
 
-                        // 2. Launch MeridianRunner app
-                        let launch_res = launch_meridian_runner(&udid, ports.stream, None).await;
+                        // 2. Launch MeridianRunner app in pure Rust via CoreDevice / DVT
+                        let launch_res = launch_meridian_runner(udid.clone(), dev_id, ports.stream, None).await;
 
                         // 3. Start Heartbeat worker if launched successfully
                         let hb = if launch_res.is_ok() {
@@ -254,9 +254,10 @@ impl MeridianApp {
                     dev.state = DeviceState::Ready;
                     dev.status_message = "Ready".to_string();
                 }
+                let dev_id = self.devices.iter().find(|d| d.udid == udid).map(|d| d.device_id).unwrap_or(0);
                 let udid_clone = udid.clone();
                 return Task::perform(async move {
-                    let _ = kill_meridian_runner(&udid_clone).await;
+                    let _ = kill_meridian_runner(udid_clone, dev_id, None).await;
                 }, |_| Message::Tick);
             }
             Message::OpenSideload(udid) => {
