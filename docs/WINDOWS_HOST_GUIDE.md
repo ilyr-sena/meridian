@@ -1,6 +1,6 @@
 # Meridian Windows Host Setup Guide
 
-This guide details setting up the Windows computer that has physical iPhones connected via USB.
+This guide details setting up a Windows computer hosting physical iOS devices connected via USB.
 
 ---
 
@@ -15,70 +15,64 @@ This guide details setting up the Windows computer that has physical iPhones con
      ```
 2. **Tailscale**:
    - Install Tailscale on the Windows machine.
-   - Log in to the same Tailnet as your VPS (`jezudotdigital@...`).
+   - Alternatively, Meridian Hub embeds the `meridian-mesh` Go sidecar (`meridian-mesh.exe`), which connects autonomously via pre-authenticated auth keys.
    - Verify your Tailscale IP:
      ```cmd
      tailscale ip -4
      ```
-     (Expected: `100.101.105.127` or similar).
 
 ---
 
-## 2. iPhone Configuration (Strict iOS 27 Requirements)
+## 2. iPhone Configuration (iOS 17 through iOS 27)
 
 1. Connect the iPhone to the Windows PC via a reliable Lightning or USB-C cable.
-2. When prompted on the iPhone, tap **"Trust This Computer"** and enter your passcode.
+2. Tap **"Trust This Computer"** and enter the device passcode.
 3. Enable **Developer Mode**:
-   - Go to **Settings > Privacy & Security > Developer Mode**.
+   - Open **Settings > Privacy & Security > Developer Mode**.
    - Toggle **Developer Mode ON**.
-   - The iPhone will restart. After restart, unlock the phone and tap **Turn On** when prompted.
+   - Restart the iPhone and tap **Turn On** when prompted.
 
 ---
 
-## 3. Running Meridian Hub on Windows
+## 3. Running Meridian Hub (Pure Rust)
 
-### Option A: Running from Source (Python 3.11 / 3.12)
-```cmd
-cd apps\hub
-python -m pip install -e .
-python -m meridian_py hub
+### Option A: Running the Standalone Executable
+Download or build the standalone binary:
+```powershell
+.\apps\hub-rust\dist\meridian.exe
 ```
 
-### Option B: Running the Standalone Executable
-Double-click `meridian.exe` or run from PowerShell:
+### Option B: Building from Source
+Ensure Rust toolchain (1.80+) is installed:
 ```powershell
-.\meridian.exe hub
-```
-
-### Option C: Running Headless CLI Daemon (Background)
-```powershell
-.\meridian.exe hub --cli
+cd apps\hub-rust
+.\build.bat
+.\dist\meridian.exe
 ```
 
 ---
 
-## 4. First-Time Setup & Sideloading
+## 4. Sideloading the Runner
 
-1. On first launch, Meridian will prompt to create Windows Firewall inbound rules. Accept the UAC prompt to allow traffic on ports `8100-8131`, `9001-9032`, and `9200-9231`.
-2. Connect your iPhone. The Meridian Hub UI will display a device card with a 6-step inspection checklist:
-   - `USB Connection`
-   - `Pairing / Trust`
-   - `Passcode Check`
-   - `iOS 27 Verification`
-   - `Developer Mode Status`
-   - `MeridianRunner Sideload Status`
+1. Connect your iPhone via USB.
+2. The Meridian Hub UI displays the device card with automatic status checks:
+   - USB connection active.
+   - Device pairing and lockdown validated.
+   - Runner installation detected.
 3. If `MeridianRunner` is not installed, click **"Sideload Runner"**:
-   - Enter your Apple ID and password (or use custom signing certificates).
-   - Enter the 2FA verification code when prompted.
-   - Meridian will automatically generate development provisioning profiles, sign the unified runner using the bundled `zsign.exe`, and install it onto the phone.
-4. Once installed, Meridian launches the runner, establishes tunnels on **Port 9200** (video stream) and **Port 8100** (WDA), arms the **60Hz HID touch digitizer** on **Port 9001**, and pushes status `online` to MongoDB.
+   - Enter your Apple ID and password (or use anisette + provisioning).
+   - The pure Rust sideloader (`isideload`) signs the prebuilt IPA (`runner\prebuilt\MeridianRunner-unsigned.ipa`) and installs it directly over usbmuxd AFC staging.
+4. Click **"Start Session"**:
+   - Binds WDA (8100), Bridge (9001), and Stream (9200).
+   - Launches `MeridianRunner` on the device via native CoreDevice DVT.
+   - Reports presence and active ports to the cloud VPS database.
 
 ---
 
-## 5. Controlling the Phone Remotely
+## 5. Remote Access
 
 Open your browser to:
 ```
 https://meridianhub.cc
 ```
-The connected phone will appear as **Online** and **Available**. Start a session to control the phone in real time with hardware-accelerated video and native capacitive touch.
+The connected phone will appear as **Online** and **Available**. Click **Use Device** to begin controlling the phone in real time with WebCodecs hardware GPU decoding and responsive touch input.

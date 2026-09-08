@@ -1,89 +1,174 @@
-# Meridian: High-Performance Remote iOS 27 Orchestration Platform
+# Meridian: Ultra-Low Latency Remote iOS Orchestration Platform
 
-Meridian is a unified, all-in-one ecosystem for remote physical iPhone control, high-framerate hardware video streaming, and multi-device USB lifecycle automation.
+Meridian is a high-performance, unified platform for physical iPhone remote control, hardware-accelerated 60fps video streaming, and automated USB device lifecycle management.
+
+Built for **iOS 17 through iOS 27**, Meridian eliminates third-party dependencies with a **100% pure Rust host hub**, a unified **ScreenCaptureKit + VideoToolbox + WebDriverAgent** on-device runner, and a modern **Next.js 16 WebCodecs GPU** web stage.
 
 ---
 
-## Repository Layout
+## Architecture Overview
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                              SIDE 1: THE HOST                               │
+│            (Host PC with USB-connected physical iOS devices)                │
+│                                                                             │
+│   [iPhone 13 (iOS 27)]       [iPhone 14]       ...      [iPhone N]          │
+│            │                      │                          │              │
+│            └──────────────────────┴─────────────┬────────────┘              │
+│                                           (USB) │                           │
+│                                                 ▼                           │
+│                      ┌──────────────────────────────────────┐               │
+│                      │       usbmuxd / AMDS (iTunes)        │               │
+│                      │  • Linux:   /var/run/usbmuxd         │               │
+│                      │  • Windows: TCP 127.0.0.1:27015      │               │
+│                      └──────────────────┬───────────────────┘               │
+│                                         ▼                                   │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │           meridian-hub (Pure Rust Desktop GUI & Daemon)             │   │
+│   │                                                                     │   │
+│   │  • Pure Rust CoreDevice: DVT app launch & process killer (Zero Py)  │   │
+│   │  • Pure Rust Sideload: isideload (GSA SRP-6a + Anisette + zsign)    │   │
+│   │  • Slot Manager: Allocates isolated port blocks per USB order       │   │
+│   │      Slot 0: WDA :8100 | Bridge :9001 | Stream :9200                │   │
+│   │  • Action Bridge Server (:9001): Native apps, icons, touch gestures │   │
+│   │  • Low-Latency TCP Splicer: usbmuxd tunnel with TCP_NODELAY enabled │   │
+│   │  • Dynamic Heartbeat: Syncs presence, tailscale_ip & host_ports     │   │
+│   └─────────────────────────────────────┬───────────────────────────────┘   │
+│                                         │                                   │
+│                                         ▼                                   │
+│                     meridian-mesh sidecar (Tailscale WireGuard)             │
+│                         Node IP: 100.93.183.86 (dynamic)                    │
+└─────────────────────────────────────────┬───────────────────────────────────┘
+                                          │  WireGuard Tailnet Mesh
+                                          ▼  (Private & Encrypted)
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                              SIDE 2: THE SERVER                             │
+│                    (Cloud VPS: 100.51.75.20 / meridianhub.cc)               │
+│                                                                             │
+│  ┌────────────────────────┐  ┌───────────────────────┐  ┌────────────────┐  │
+│  │ Tailscale Daemon       │  │ MongoDB (:27017)      │  │ Omnisette      │  │
+│  │ WireGuard endpoint     │  │ Devices & Sessions DB │  │ Port 6969      │  │
+│  └────────────────────────┘  └───────────────────────┘  └────────────────┘  │
+│                                          ▲                                  │
+│                                          │ Change Streams + SSE             │
+│  ┌───────────────────────────────────────┴───────────────────────────────┐  │
+│  │                  Next.js 16 Control Center (Port 3000)                │  │
+│  │  • Real-time device leasing & session lifecycle state machine         │  │
+│  │  • WebCodecs GPU stream decoder (avc1.64002a hardware acceleration)   │  │
+│  │  • Normalized coordinate gesture tracking (taps, drags, swipes)       │  │
+│  │  • Real-time session teardown & resource cleanup                      │  │
+│  └───────────────────────────────────────▲───────────────────────────────┘  │
+│                                          │                                  │
+│  ┌───────────────────────────────────────┴───────────────────────────────┐  │
+│  │                  Nginx Reverse Proxy (:80 / :443 / :9200 SSL)         │  │
+│  │  • Let's Encrypt SSL termination (meridianhub.cc)                     │  │
+│  │  • Web UI: https://meridianhub.cc -> 127.0.0.1:3000                   │  │
+│  │  • Dynamic Node Proxy: /dev/<tailscale_ip>/<port>/<path>              │  │
+│  │  • Stream SSL Proxy: https://meridianhub.cc:9200 (secure WebCodecs)   │  │
+│  └───────────────────────────────────────▲───────────────────────────────┘  │
+└──────────────────────────────────────────┼──────────────────────────────────┘
+                                           │  HTTPS / WSS (Secure Context)
+                                           ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                              END-USER BROWSER                               │
+│         WebCodecs VideoDecoder (Hardware GPU) + WebSocket Control           │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Repository Structure
 
 ```
 MERIDIAN-PROJECT/
 ├── apps/
-│   ├── hub/                 # Desktop Hub (PySide6 GUI + headless CLI daemon)
-│   │   ├── bin/             # Bundled binaries: meridian-mesh, meridian-mesh.exe, zsign.exe
-│   │   ├── packaging/       # PyInstaller single-binary build scripts (.spec, build_binary.py)
-│   │   └── src/meridian_py/ # Core Python daemon, Inspector, Slots, Vault, Bridge, Sideload
-│   └── web/                 # Next.js 15 React Control Center (Frontend Dashboard & API)
+│   ├── hub-rust/            # Production Pure Rust Desktop App (Iced GUI + Tokio daemon)
+│   │   ├── src/
+│   │   │   ├── device/      # CoreDevice DVT launcher, lockdown, monitor, actions, tunnel
+│   │   │   ├── remote/      # Action bridge (:9001), heartbeat sync, mesh sidecar
+│   │   │   ├── sideload/    # Pure Rust isideload installer
+│   │   │   ├── core/        # Slots, vault, privilege management
+│   │   │   └── ui/          # Iced GUI tabs (devices, status, settings, logs, sideload)
+│   │   ├── dist/            # Self-contained distribution bundle
+│   │   │   ├── meridian     # Standalone Linux binary
+│   │   │   └── bin/         # Bundled meridian-mesh sidecar
+│   │   ├── build.sh         # Linux release build script
+│   │   └── build.bat        # Windows release build script
+│   └── web/                 # Next.js 16 React Web Control Center
 │       ├── app/             # App Router pages and REST/SSE API endpoints
 │       └── components/      # PhoneStage, H264StreamPlayer (WebCodecs GPU), Sidebar
-├── packages/
-│   ├── ui/                  # Shared Tailwind & Radix UI design system
-│   ├── eslint-config/       # ESLint configurations
-│   └── typescript-config/   # TypeScript build configs
 ├── runner/                  # Unified on-device iOS app (MeridianRunner)
 │   ├── ProbeApp/            # Swift ScreenCaptureKit H.264 engine & TinyHTTPServer
-│   ├── prebuilt/            # Unsigned IPA asset (MeridianRunner-unsigned.ipa)
+│   ├── prebuilt/            # Precompiled IPA asset (MeridianRunner-unsigned.ipa)
 │   └── tools/               # merge_probe_wda.py (merges Probe into WebDriverAgent)
-├── sidecar/                 # meridian-mesh Go tsnet userspace WireGuard source
+├── sidecar/                 # meridian-mesh Go tsnet WireGuard source
 ├── infra/                   # VPS deployment configs
-│   ├── nginx/               # Nginx SSL reverse proxy & /dev/{port} streaming configs
-│   └── systemd/             # Next.js systemd service file
-├── docs/                    # Architectural & operational documentation
-│   ├── ARCHITECTURE.md      # Full 2-sided architectural map & byte flow
-│   ├── PORTS.md             # Dynamic slot & port allocation matrix
-│   └── WINDOWS_HOST_GUIDE.md# Windows host setup and device onboarding
-└── .github/workflows/       # Automated CI/CD
-    └── unified-runner.yml   # Xcode 27 macOS runner IPA build pipeline
+│   ├── nginx/               # Nginx SSL reverse proxy configs (meridian.conf, stream.conf)
+│   └── systemd/             # Systemd service units
+├── docs/                    # Technical documentation
+│   ├── ARCHITECTURE.md      # Detailed system architecture and data flows
+│   ├── PORTS.md             # Port matrix and dynamic slot assignment
+│   ├── WINDOWS_HOST_GUIDE.md# Windows host setup and AMDS configuration
+│   └── STREAM_DIAGNOSTICS_AND_AI_HANDOFF.md # Complete findings, diagnostics & handoff
+└── .github/workflows/
+    └── unified-runner.yml   # macOS-15 Xcode 16 automated IPA build pipeline
 ```
 
 ---
 
-## Key Features
+## Key Features & Capabilities
 
-1. **Strict iOS 27 Architecture**:
-   - Engineered specifically for iOS 27 (`ProductVersion.startswith("27")`).
-   - Automatically inspects USB trust, device passcode, and AMFI Developer Mode.
-2. **Definitive Port Standard (9200 Video Stream)**:
-   - Screen stream standard: **Port 9200** (H.264 WebSockets + WebCodecs hardware player).
-   - WDA automation: **Port 8100**.
-   - CoreDevice HID Touch/Keyboard Bridge: **Port 9001**.
-3. **Dynamic Slot Allocation**:
-   - Automatically assigns port blocks ordered strictly by USB connection sequence:
-     - Slot 0: `WDA:8100`, `Bridge:9001`, `Stream:9200`
-     - Slot 1: `WDA:8101`, `Bridge:9002`, `Stream:9201`
-     - Slot N: `WDA:8100+N`, `Bridge:9001+N`, `Stream:9200+N`
-4. **Zero-Leak Tailscale Security**:
-   - Public end users connect only to `https://meridianhub.cc` and `wss://meridianhub.cc/dev/{port}/*`.
-   - Host private Tailscale IPs are never exposed to the client browser.
-   - Zero mixed-content warnings, full SSL encryption.
-5. **Zero-Latency HID Digitizer & Keyboard**:
-   - 60Hz native capacitive touchscreen digitizer.
-   - 39-byte bitmap HID hardware keyboard reporting with modifier bitmasks.
-   - Suppresses iOS on-screen keyboard automatically during typing.
-6. **Cross-Platform Host Support**:
-   - Windows 10/11: Native support with automated Windows Firewall rule creation and iTunes AMDS TCP 27015 detection.
-   - Linux: Full support with `/var/run/usbmuxd`.
+1. **Pure Rust Host (Zero Python)**:
+   - Replaced all legacy Python scripts (`pymobiledevice3`, `sideload-engine.py`, `meridian_py`).
+   - App launching, process termination, device enrichment, and sideloading run natively via `idevice`, `isideload`, `tokio`, and `iced`.
+
+2. **WebCodecs Hardware GPU Streaming (`avc1.64002a`)**:
+   - Ultra-low latency H.264 video decoding using browser WebCodecs API (`window.VideoDecoder`).
+   - Delivered over secure HTTPS/WSS contexts to eliminate software MSE buffering and drift.
+   - `requestAnimationFrame` render loop synchronizes paints with display VSync.
+
+3. **Dynamic Multi-Node Tailscale Mesh**:
+   - Dynamic routing pattern: `/dev/<tailscale_ip>/<port>/<path>`.
+   - Host nodes auto-register with dynamic machine hostnames (`meridian-<hostname>`).
+   - Nginx on VPS routes traffic dynamically without hardcoded IPs.
+
+4. **Action & Control Bridge Server (Port 9001)**:
+   - HTTP endpoints: `GET /apps.json`, `GET /apps/running.json`, `GET /icon/:bid.png`, `POST /app/launch/:bid`, `POST /app/kill/:pid`.
+   - WebSocket (`/ws`): Bidirectional touch coordinate normalization (taps, drags, swipes), keyboard input, and hardware button dispatch.
+
+5. **Real-Time Session Lifecycle & Port Management**:
+   - MongoDB Change Streams coupled with Server-Sent Events (`/api/events`) drive instant UI state changes.
+   - Session stop cleanly clears allocated `host_ports` and terminates runner instances on device.
 
 ---
 
 ## Quickstart
 
-### 1. Running the Hub (Host Machine)
+### 1. Build and Run the Pure Rust Hub (Host Machine)
 ```bash
-cd apps/hub
-pip install -e .
-python -m meridian_py hub
+cd apps/hub-rust
+./build.sh
+./dist/meridian
 ```
-*(On Windows, run `meridian.exe hub`)*
 
-### 2. Running the Web Control Center (Server / Local Dev)
+### 2. Run the Web Control Center (Local Development)
 ```bash
 pnpm install
 pnpm --filter web dev
 ```
 Open [http://localhost:3000](http://localhost:3000)
 
-### 3. Documentation
-- Read [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the complete two-sided architecture.
-- Read [docs/PORTS.md](docs/PORTS.md) for port and slot details.
-- Read [docs/WINDOWS_HOST_GUIDE.md](docs/WINDOWS_HOST_GUIDE.md) for Windows configuration.
+### 3. Production Deployment (VPS)
+- Web App runs via PM2: `pm2 status` (process `meridian` on port 3000).
+- Nginx terminates SSL for `meridianhub.cc` and proxies ports 80, 443, and 9200.
+- MongoDB runs locally on port 27017 (`mongodb://127.0.0.1:27017/meridian`).
+
+---
+
+## Technical Documentation
+
+- **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**: Comprehensive architectural breakdown.
+- **[docs/PORTS.md](docs/PORTS.md)**: Port allocation and slot mapping matrix.
+- **[docs/WINDOWS_HOST_GUIDE.md](docs/WINDOWS_HOST_GUIDE.md)**: Windows host onboarding guide.
+- **[docs/STREAM_DIAGNOSTICS_AND_AI_HANDOFF.md](docs/STREAM_DIAGNOSTICS_AND_AI_HANDOFF.md)**: Complete root-cause diagnostics, network analysis, credentials, and future engineering roadmap.
