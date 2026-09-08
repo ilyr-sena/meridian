@@ -15,6 +15,9 @@ export interface H264StreamPlayerProps {
   fallbackUrl?: string
   className?: string
   style?: React.CSSProperties
+  scale?: number
+  fps?: number
+  bitrateMbps?: number
   onStatusChange?: (status: "connecting" | "loaded" | "error") => void
   onStatsUpdate?: (stats: StreamStats) => void
 }
@@ -24,6 +27,9 @@ export const H264StreamPlayer = memo(function H264StreamPlayer({
   fallbackUrl = "http://localhost:9200/stream",
   className,
   style,
+  scale = 0.6,
+  fps = 60,
+  bitrateMbps = 2.5,
   onStatusChange,
   onStatsUpdate,
 }: H264StreamPlayerProps) {
@@ -354,6 +360,20 @@ export const H264StreamPlayer = memo(function H264StreamPlayer({
       ws.onopen = () => {
         if (s.unmounted) return
         setStreamStatus("loaded")
+        // Request 720p 60fps low-latency stream tuning from runner
+        try {
+          ws.send(
+            JSON.stringify({
+              op: "tune",
+              scale: scale,
+              bitrateMbps: bitrateMbps,
+              maxFps: fps,
+              keyframeSeconds: 1.0,
+            })
+          )
+        } catch {
+          // ignore
+        }
       }
 
       ws.onclose = () => {
@@ -495,6 +515,26 @@ export const H264StreamPlayer = memo(function H264StreamPlayer({
       }
     }
   }, [wsUrl])
+
+  // Dynamically update stream tuning over WebSocket when scale, fps, or bitrate changes
+  useEffect(() => {
+    const ws = stateRef.current.ws
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      try {
+        ws.send(
+          JSON.stringify({
+            op: "tune",
+            scale,
+            bitrateMbps,
+            maxFps: fps,
+            keyframeSeconds: 1.0,
+          })
+        )
+      } catch {
+        // ignore
+      }
+    }
+  }, [scale, fps, bitrateMbps])
 
   return (
     <div className={cn("relative h-full w-full overflow-hidden bg-black select-none", className)} style={style}>

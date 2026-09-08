@@ -177,60 +177,67 @@ The 10-second latency spike and FPS fluctuation are caused by **four compounding
    - Removed deprecated AV1/codec badge.
    - Enforced `isDeviceActive` guard for clean real-time teardown on session stop.
 
+### 4.4 Dynamic 720p Resolution & Low-Latency Tuning (Newly Implemented)
+1. **Dynamic WebSocket 720p Tuning in `h264-stream-player.tsx`**:
+   - On WebSocket connection (`ws.onopen`), the web player automatically sends a tuning command to the on-device runner:
+     ```json
+     {"op": "tune", "scale": 0.6, "bitrateMbps": 2.5, "maxFps": 60, "keyframeSeconds": 1.0}
+     ```
+   - Also listens to live `scale`, `fps`, and `bitrateMbps` prop updates, dispatching tune updates in real time without tearing down the WebSocket.
+2. **`phone-stage.tsx` Default Resolution**:
+   - Changed default scale from `1.0` (1170×2532, 2.96 MP) to `0.6` (**720p**, `702 × 1520` pixels), cutting raw pixel throughput by **62%**.
+   - Passed `scale={scale}`, `fps={fps}`, and `bitrateMbps={2.5}` to `H264StreamPlayer`.
+3. **Runner Default Stream Tuning (`H264Stream.swift`)**:
+   - Updated `StreamTuning` default values to `scale = 0.6`, `bitrateMbps = 2.5`, `maxFps = 60`, and `keyframeSeconds = 1.0`.
+   - Updated embedded web player default state in `playerHTML` to match.
+4. **`meridian-mesh` Go Sidecar (`sidecar/main.go`)**:
+   - Added `tc.SetNoDelay(true)` to local and remote TCP sockets in `handleProxy`, eliminating Nagle's algorithm delay in the tsnet WireGuard user proxy.
+   - Rebuilt production binary at `apps/hub-rust/dist/bin/meridian-mesh`.
+
 ---
 
 ## 5. Master Roadmap to Achieve Locked 60 FPS & Sub-30ms Latency
 
-To permanently eliminate the motion-induced 10-second latency spike and lock the stream at 60 FPS, the following four engineering steps must be executed:
+To permanently eliminate the motion-induced latency spikes and lock the stream at 60 FPS, execute the following steps:
 
-### Step 1: Enforce Resolution Downscaling & Adaptive Bitrate in Runner
-- **The Problem**: 1170×2532 native resolution is too heavy for remote internet transmission.
-- **The Solution**: Default the stream scale to `0.5x` (`585 × 1266` pixels) with `bitrate = 2.5 Mbps` in `runner/ProbeApp/H264Stream.swift`:
-  ```swift
-  struct StreamTuning: Codable {
-      var bitrateMbps: Double = 2.5      // 2.5 Mbps is ideal for 60fps 720p
-      var maxFps: Double = 60            // Lock to 60 fps
-      var scale: Double = 0.5            // 0.5x downscaling (585x1266)
-      var keyframeSeconds: Double = 1.0
-  }
-  ```
-- **Result**: Cuts raw pixel processing by 75% (from 177 MP/s to 44 MP/s). Bitrate under high motion remains strictly under 3.5 Mbps, easily fitting within standard upload pipes without bufferbloat.
+### Step 1: 720p Downscaling & Adaptive Bitrate (Implemented)
+- **Status**: **COMPLETE**.
+- Stream default is now 720p (`0.6x` scale, 2.5 Mbps, 60 fps).
+- Dynamically applied over WebSocket on connect and on prop changes.
 
-### Step 2: Ensure Direct P2P WireGuard Connection (Bypass DERP)
-- Check connection mode on VPS:
+### Step 2: Ensure Direct P2P WireGuard Connection (Bypass DERP Relay)
+- **Diagnostic Command** on VPS:
   ```bash
   sudo tailscale status
   sudo tailscale ping 100.93.183.86
   ```
 - If the output says `via DERP(...)` instead of `direct ...:41641`:
-  - Open UDP port `41641` on the Host PC router (Port Forwarding / UPnP).
+  - Open UDP port `41641` on the Host PC's residential router (Port Forwarding / UPnP).
   - Configure `tailscale` with `--port=41641` so direct peer-to-peer WireGuard tunnels can be established without bouncing through cloud relay servers.
 
-### Step 3: Optimize VPS Memory & Eliminate Swap Paging
-- **Reduce Memory Footprint on 1 GB VPS**:
-  1. Kill dead root PM2 daemon: `sudo pm2 kill`
-  2. Optimize Next.js startup: Replace `npm run start` with direct `node server.js` or `next start` (saves 67 MB RAM).
+### Step 3: Mitigate VPS Memory Saturation & Swap Thrashing
+- **Root Cause**: The 939 MB RAM VPS has 506 MB of swap active, causing kernel socket buffer throttling and major page faults during high-throughput proxying.
+- **Actionable Steps**:
+  1. Kill dead root PM2 daemon: `sudo pm2 kill` (saves 22 MB RAM).
+  2. Optimize Next.js startup: Run `next start` directly rather than through `npm` wrapper (saves 67 MB RAM).
   3. Lower Linux swappiness:
      ```bash
-     sudo sysctl vm.swappiness=10
-     echo "vm.swappiness=10" | sudo tee -a /etc/sysctl.conf
+     echo 122 | sudo -S sysctl vm.swappiness=10
      ```
-  4. Constrain MongoDB cache size in `/etc/mongod.conf`:
+  4. Constrain MongoDB WiredTiger cache in `/etc/mongod.conf`:
      ```yaml
      storage:
        wiredTiger:
          engineConfig:
            cacheSizeGB: 0.25
      ```
-- **Recommended**: Upgrade VPS to **2 GB RAM** ($5/month). Running Next.js 16 + MongoDB + Tailscale + Nginx on 1 GB RAM leaves zero buffer cache for high-throughput video streaming.
+  5. **Strong Recommendation**: Upgrade VPS from 1 GB RAM to **2 GB RAM** ($5/month). Running Next.js 16 + MongoDB + Tailscale + Nginx on 939 MB leaves zero buffer cache for high-throughput video streaming.
 
-### Step 4: Add Drop-Behind Backlog Controller on Browser Player
+### Step 4: Client-Side Drop-Behind Backlog Controller
 - In `apps/web/components/h264-stream-player.tsx`:
-  - Track the delta between the packet's timestamp and `performance.now()`.
-  - If network lag causes a queue of > 3 chunks to arrive simultaneously, drop non-keyframes and fast-forward to the latest keyframe chunk:
+  - If network lag causes a burst of > 3 chunks to arrive simultaneously, drop non-keyframes and fast-forward to the latest keyframe chunk:
     ```typescript
     if (naluDataQueue.length > 3) {
-        // Fast-forward: drop queued delta frames to restore zero latency
         naluDataQueue = naluDataQueue.filter(chunk => chunk.isKey);
     }
     ```

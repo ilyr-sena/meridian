@@ -336,8 +336,8 @@ export function PhoneStage({ className }: { className?: string }) {
   const [isMenuOpen, setIsMenuOpen] = useState(false)
   const [isAppsOpen, setIsAppsOpen] = useState(false)
   const [quality, setQuality] = useState(2)
-  const [fps, setFPS] = useState(30)
-  const [scale, setScale] = useState(1.0)
+  const [fps, setFPS] = useState(60)
+  const [scale, setScale] = useState(0.6)
   const [apps, setApps] = useState<App[]>([])
   const [appsLoading, setAppsLoading] = useState(true)
   const [appsError, setAppsError] = useState<string | null>(null)
@@ -1080,6 +1080,9 @@ export function PhoneStage({ className }: { className?: string }) {
                 <H264StreamPlayer
                   wsUrl={activeEndpoints.streamWs}
                   fallbackUrl={streamUrl}
+                  scale={scale}
+                  fps={fps}
+                  bitrateMbps={2.5}
                   onStatusChange={setStreamStatus}
                   onStatsUpdate={setStreamStats}
                 />

@@ -67,6 +67,13 @@ func handleProxy(remote net.Conn, localAddr string) {
 	}
 	defer local.Close()
 
+	if tc, ok := local.(*net.TCPConn); ok {
+		_ = tc.SetNoDelay(true)
+	}
+	if tc, ok := remote.(*net.TCPConn); ok {
+		_ = tc.SetNoDelay(true)
+	}
+
 	var wg sync.WaitGroup
 	wg.Add(2)
 

@@ -159,9 +159,9 @@ private enum MP4 {
 // Stream configuration — live-adjustable, persisted across runs.
 // ---------------------------------------------------------------------------
 struct StreamTuning: Codable {
-    var bitrateMbps: Double = 6.0      // target average bitrate
-    var maxFps: Double = 0             // 0 = uncapped
-    var scale: Double = 1.0            // resolution factor (0.25…1)
+    var bitrateMbps: Double = 2.5      // target average bitrate (2.5 Mbps for 720p 60fps)
+    var maxFps: Double = 60            // 60 fps
+    var scale: Double = 0.6            // 720p resolution factor (0.6x = 702x1520)
     var keyframeSeconds: Double = 1.0  // IDR interval
 
     static let bitsRange = 0.5...12.0
@@ -1003,7 +1003,7 @@ extension H264Stream {
   connect();
 
   // ---- tuning panel --------------------------------------------------------
-  const state = { bitrateMbps: 6, maxFps: 0, scale: 1, keyframeSeconds: 1 };
+  const state = { bitrateMbps: 2.5, maxFps: 60, scale: 0.6, keyframeSeconds: 1 };
   document.getElementById('btnTune').onclick = () => panel.classList.toggle('closed');
   document.getElementById('btnFs').onclick = () => {
     const el = webCodecsDecoder ? c : v;
