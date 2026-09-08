@@ -47,6 +47,7 @@ export const H264StreamPlayer = memo(function H264StreamPlayer({
     codecStr: "h264",
     unmounted: false,
     hasSeenKeyFrame: false,
+    animFrameId: null as number | null,
   })
 
   useEffect(() => {
@@ -232,17 +233,38 @@ export const H264StreamPlayer = memo(function H264StreamPlayer({
         }
       }
 
+      let pendingFrame: any = null
+
+      function renderLoop() {
+        if (s.unmounted) return
+        const cvs = canvasRef.current
+        if (pendingFrame && cvs && ctx2d) {
+          const f = pendingFrame
+          pendingFrame = null
+          if (cvs.width !== f.displayWidth || cvs.height !== f.displayHeight) {
+            cvs.width = f.displayWidth
+            cvs.height = f.displayHeight
+          }
+          ctx2d.drawImage(f, 0, 0)
+          f.close()
+          s.fpsCount++
+          setStreamStatus("loaded")
+        }
+        s.animFrameId = requestAnimationFrame(renderLoop)
+      }
+
+      if (s.animFrameId) {
+        cancelAnimationFrame(s.animFrameId)
+      }
+      s.animFrameId = requestAnimationFrame(renderLoop)
+
       const VideoDecoderClass = (window as any).VideoDecoder
       const decoder = new VideoDecoderClass({
         output: (frame: any) => {
-          if (canvas.width !== frame.displayWidth || canvas.height !== frame.displayHeight) {
-            canvas.width = frame.displayWidth
-            canvas.height = frame.displayHeight
+          if (pendingFrame) {
+            pendingFrame.close()
           }
-          ctx2d.drawImage(frame, 0, 0)
-          frame.close()
-          s.fpsCount++
-          setStreamStatus("loaded")
+          pendingFrame = frame
         },
         error: (err: any) => {
           console.warn("[Meridian] WebCodecs decode warning (will resync on next IDR):", err)
@@ -442,6 +464,10 @@ export const H264StreamPlayer = memo(function H264StreamPlayer({
 
     return () => {
       s.unmounted = true
+      if (s.animFrameId) {
+        cancelAnimationFrame(s.animFrameId)
+        s.animFrameId = null
+      }
       clearInterval(statsTimer)
       clearInterval(pingTimer)
       clearInterval(mseTimer)

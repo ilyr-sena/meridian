@@ -8,7 +8,7 @@ on:
 
 jobs:
   build:
-    runs-on: xcode-27
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
 
@@ -32,7 +32,7 @@ jobs:
             -destination 'generic/platform=iOS' \
             -configuration Debug \
             -derivedDataPath build \
-            IPHONEOS_DEPLOYMENT_TARGET=27.0 \
+            IPHONEOS_DEPLOYMENT_TARGET=17.0 \
             GCC_TREAT_WARNINGS_AS_ERRORS=NO \
             SWIFT_TREAT_WARNINGS_AS_ERRORS=NO \
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY=""

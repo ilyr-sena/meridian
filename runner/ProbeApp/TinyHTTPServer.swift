@@ -179,9 +179,9 @@ final class WebSocketConn {
         lock.lock()
         guard !closed else { lock.unlock(); return }
 
-        // Low-latency queue policy: if video frames are backing up in outbox,
-        // drop stale frames and request a fresh IDR keyframe immediately.
-        if opcode == 0x2 && outbox.count >= 2 {
+        // Low-latency queue policy: if video frames are backing up significantly (>= 15 frames or > 1.5MB),
+        // drop stale frames and request a fresh IDR keyframe to resync without lag.
+        if opcode == 0x2 && (outbox.count >= 15 || outBytes > 1_500_000) {
             outbox.removeAll()
             outBytes = 0
             H264Stream.shared.requestKeyFrame()

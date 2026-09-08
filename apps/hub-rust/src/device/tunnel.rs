@@ -83,6 +83,7 @@ pub async fn connect_usbmuxd() -> std::io::Result<UsbmuxStream> {
         }
         // Fallback to TCP if unix socket not accessible
         let stream = TcpStream::connect("127.0.0.1:27015").await?;
+        let _ = stream.set_nodelay(true);
         Ok(UsbmuxStream::Tcp(stream))
     }
     #[cfg(windows)]
@@ -147,6 +148,7 @@ pub async fn start_tunnel(
                     match accept_res {
                         Ok((client_stream, client_addr)) => {
                             debug!("Accepted tunnel connection from {} on :{}", client_addr, local_port);
+                            let _ = client_stream.set_nodelay(true);
                             tokio::spawn(async move {
                                 if let Err(e) = forward_connection(client_stream, device_id, device_port).await {
                                     debug!("Tunnel forward error: {:?}", e);

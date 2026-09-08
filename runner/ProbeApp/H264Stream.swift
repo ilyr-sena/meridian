@@ -400,6 +400,9 @@ final class H264Stream {
         VTSessionSetProperty(s, key: kVTCompressionPropertyKey_PrioritizeEncodingSpeedOverQuality, value: kCFBooleanTrue)
         VTSessionSetProperty(s, key: kVTCompressionPropertyKey_AverageBitRate,
                              value: Int(tuning.bitrateMbps * 1_000_000) as CFNumber)
+        let maxBytesPerSec = Int(tuning.bitrateMbps * 1_000_000 * 1.5 / 8)
+        let limits: [CFNumber] = [maxBytesPerSec as CFNumber, 1 as CFNumber]
+        VTSessionSetProperty(s, key: kVTCompressionPropertyKey_DataRateLimits, value: limits as CFArray)
         VTSessionSetProperty(s, key: kVTCompressionPropertyKey_ExpectedFrameRate,
                              value: 60 as CFNumber)
         VTSessionSetProperty(s, key: kVTCompressionPropertyKey_MaxKeyFrameInterval,
