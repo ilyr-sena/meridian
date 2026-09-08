@@ -922,7 +922,8 @@ extension H264Stream {
   // ---- websocket -----------------------------------------------------------
   function connect() {
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-    const wsPath = location.pathname.replace(/\/+$/, '') + '/stream.ws';
+    const p = location.pathname.endsWith('/') ? location.pathname.slice(0, -1) : location.pathname;
+    const wsPath = p + '/stream.ws';
     ws = new WebSocket(proto + '://' + location.host + wsPath);
     ws.binaryType = 'arraybuffer';
 
