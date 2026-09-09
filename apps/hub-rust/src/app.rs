@@ -420,6 +420,7 @@ impl MeridianApp {
     pub fn view(&self) -> Element<'_, Message> {
         let titlebar = view_titlebar(
             self.tunnel_status.is_running,
+            self.tunnel_status.latency_ms,
             Message::TitleAction,
         );
 

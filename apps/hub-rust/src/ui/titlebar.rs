@@ -16,6 +16,7 @@ pub enum TitleBarAction {
 
 pub fn view_titlebar<'a, Message>(
     tunnel_online: bool,
+    latency_ms: u32,
     on_action: impl Fn(TitleBarAction) -> Message + 'a + Copy,
 ) -> Element<'a, Message>
 where
@@ -39,20 +40,32 @@ where
     .spacing(8)
     .align_y(Alignment::Center);
 
-    // 2. Tunnel status pill
+    // 2. Tunnel status pill with latency
     let tunnel_indicator = if tunnel_online {
+        let latency_color = if latency_ms < 80 {
+            ACCENT_EMERALD
+        } else if latency_ms < 150 {
+            ACCENT_BLUE
+        } else {
+            ACCENT_AMBER
+        };
+        let pill_text = if latency_ms > 0 {
+            format!("{}ms", latency_ms)
+        } else {
+            "Online".to_string()
+        };
         container(
             row![
                 container(Space::new().width(6).height(6))
-                    .style(|_| container::Style {
-                        background: Some(ACCENT_EMERALD.into()),
+                    .style(move |_| container::Style {
+                        background: Some(latency_color.into()),
                         border: iced::Border {
                             radius: iced::border::Radius::from(9999.0),
                             ..Default::default()
                         },
                         ..Default::default()
                     }),
-                text("Tunnel Online")
+                text(pill_text)
                     .font(FONT_MONO)
                     .size(11)
                     .color(TEXT_SECONDARY),

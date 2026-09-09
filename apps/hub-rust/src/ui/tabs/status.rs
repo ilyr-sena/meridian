@@ -55,7 +55,56 @@ where
     )
     .style(style_card);
 
-    // 2. Active Sessions Table
+    // 2. Network Latency Card
+    let latency_color = if tunnel.latency_ms == 0 {
+        TEXT_MUTED
+    } else if tunnel.latency_ms < 80 {
+        ACCENT_EMERALD
+    } else if tunnel.latency_ms < 150 {
+        ACCENT_BLUE
+    } else {
+        ACCENT_AMBER
+    };
+
+    let latency_card = container(
+        column![
+            text("NETWORK LATENCY (HOST → VPS)")
+                .font(FONT_SEMIBOLD)
+                .size(11)
+                .color(TEXT_MUTED),
+            Space::new().height(8),
+            row![
+                column![
+                    text("Current").font(FONT_REGULAR).size(12).color(TEXT_SECONDARY),
+                    text(format!("{}ms", tunnel.latency_ms)).font(FONT_MONO).size(20).color(latency_color),
+                ],
+                Space::new().width(Length::Fill),
+                column![
+                    text("Average").font(FONT_REGULAR).size(12).color(TEXT_SECONDARY),
+                    text(format!("{}ms", tunnel.avg_latency_ms)).font(FONT_MONO).size(16).color(TEXT_PRIMARY),
+                ],
+                Space::new().width(Length::Fill),
+                column![
+                    text("Min").font(FONT_REGULAR).size(12).color(TEXT_SECONDARY),
+                    text(format!("{}ms", tunnel.min_latency_ms)).font(FONT_MONO).size(14).color(ACCENT_EMERALD),
+                ],
+                Space::new().width(Length::Fill),
+                column![
+                    text("Max").font(FONT_REGULAR).size(12).color(TEXT_SECONDARY),
+                    text(format!("{}ms", tunnel.max_latency_ms)).font(FONT_MONO).size(14).color(ACCENT_AMBER),
+                ],
+                Space::new().width(Length::Fill),
+                column![
+                    text("Est. Speed").font(FONT_REGULAR).size(12).color(TEXT_SECONDARY),
+                    text(format!("{:.0} Mbps", tunnel.connection_speed_mbps)).font(FONT_MONO).size(14).color(TEXT_PRIMARY),
+                ],
+            ]
+        ]
+        .padding(16)
+    )
+    .style(style_card);
+
+    // 3. Active Sessions Table
     let mut table_rows: Vec<Element<'a, Message>> = Vec::new();
 
     table_rows.push(
@@ -111,7 +160,7 @@ where
     .style(style_card);
 
     scrollable(
-        column![tunnel_card, sessions_card]
+        column![tunnel_card, latency_card, sessions_card]
             .spacing(14)
     )
     .into()
