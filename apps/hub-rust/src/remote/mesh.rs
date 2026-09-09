@@ -165,21 +165,37 @@ fn generate_client_config() -> String {
     format!(
         r#"[client]
 remote_addr = "{vps_addr}"
+retry_interval = 1
+heartbeat_timeout = 10
+
+[client.transport]
+type = "tcp"
+
+[client.transport.tcp]
+nodelay = true
+keepalive_secs = 10
+keepalive_interval = 3
 
 [client.services.wda]
 type = "tcp"
 token = "{wda_token}"
 local_addr = "127.0.0.1:8100"
+nodelay = true
+retry_interval = 1
 
 [client.services.bridge]
 type = "tcp"
 token = "{bridge_token}"
 local_addr = "127.0.0.1:9001"
+nodelay = true
+retry_interval = 1
 
 [client.services.stream]
 type = "tcp"
 token = "{stream_token}"
 local_addr = "127.0.0.1:9200"
+nodelay = true
+retry_interval = 1
 "#,
         vps_addr = VPS_ADDR,
         wda_token = "meridian-wda-token",
