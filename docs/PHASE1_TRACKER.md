@@ -2,7 +2,7 @@
 
 **Goal**: Replace Tailscale DERP relay with rathole direct TCP tunnel. Eliminate transport bottleneck.
 
-**Status**: IN PROGRESS
+**Status**: HUB-RUST COMPLETE. Docs update remaining.
 
 ---
 
@@ -23,6 +23,14 @@
 
 **VPS Status**: COMPLETE. Rathole server listening on :2333. Awaiting client connections for service ports.
 
+**Pipeline Status**: All services verified working:
+- PM2 meridian app → port 3000 ✅
+- MongoDB → port 27017 ✅ (fixed bad config from memory optimization)
+- Omnisette → port 6969 ✅
+- Heartbeat API → /api/devices/heartbeat ✅
+- Rathole server → port 2333 ✅
+- Nginx → ports 80/443/8100/9001/9200 ✅ (502 on 9001/8100/9200 expected until rathole client connects)
+
 ---
 
 ## Hub-Rust Side (Host PC)
@@ -40,8 +48,8 @@
 | 19 | Update UI: status.rs (remove "TAILSCALE MESH OVERVIEW") | DONE | Now "RATHOLE DIRECT TUNNEL" with VPS endpoint display |
 | 20 | Update UI: settings.rs (remove tailscale section) | DONE | Entire TAILSCALE MESH CONFIGURATION section removed |
 | 21 | Update UI: app.rs (remove KeyUrlChanged, AuthKeyChanged, RefreshKeyNow messages) | DONE | Removed from Message enum and update handler |
-| 22 | Build and verify compilation | DONE | `cargo check` passes clean |
-| 23 | Commit all hub-rust changes | PENDING | |
+| 22 | Build and verify compilation | DONE | Clean build, zero warnings, 9m 31s |
+| 23 | Commit all hub-rust changes | DONE | `60bc27b` — 14 files changed, 1264 insertions, 637 deletions |
 
 ---
 
@@ -89,4 +97,4 @@ token: "meridian-rathole-2026"
 
 ---
 
-*Last updated: 2026-09-08 — VPS setup complete, starting hub-rust integration*
+*Last updated: 2026-09-09 — Hub-rust code complete, VPS pipeline verified, MongoDB fixed*
