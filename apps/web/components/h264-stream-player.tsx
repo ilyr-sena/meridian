@@ -99,33 +99,38 @@ export const H264StreamPlayer = memo(function H264StreamPlayer({
       }
     }, 1000)
 
-    // MSE drift controller
+    // MSE drift controller — aggressive low-latency correction
     const mseTimer = setInterval(() => {
       const v = videoRef.current
       const sb = s.sourceBuffer
       if (v && sb && sb.buffered.length > 0 && !s.decoder) {
         const end = sb.buffered.end(sb.buffered.length - 1)
         const behind = end - v.currentTime
-        if (behind > 1.0) {
-          v.currentTime = end - 0.05
+        if (behind > 0.5) {
+          // Hard seek — more than 500ms behind, jump to live edge
+          v.currentTime = end - 0.02
           v.playbackRate = 1.0
-        } else if (behind > 0.12) {
-          v.playbackRate = 1.08
+        } else if (behind > 0.08) {
+          // Medium drift — speed up to catch up
+          v.playbackRate = 1.5
+        } else if (behind > 0.03) {
+          // Small drift — gentle speedup
+          v.playbackRate = 1.15
         } else {
           v.playbackRate = 1.0
         }
         if (v.paused || v.ended) {
           v.play().catch(() => {})
         }
-        if (behind > 6 && !sb.updating && !s.isAppending) {
+        if (behind > 3 && !sb.updating && !s.isAppending) {
           try {
-            sb.remove(sb.buffered.start(0), end - 2.0)
+            sb.remove(sb.buffered.start(0), end - 1.0)
           } catch {
             // ignore
           }
         }
       }
-    }, 200)
+    }, 50)
 
     function drainMSE() {
       const sb = s.sourceBuffer
@@ -151,13 +156,14 @@ export const H264StreamPlayer = memo(function H264StreamPlayer({
         try {
           const sb = ms.addSourceBuffer(mime)
           s.sourceBuffer = sb
-          sb.mode = "segments"
+          sb.mode = "sequence"
           sb.addEventListener("updateend", () => {
             drainMSE()
             if (!initialSeekDone && sb.buffered.length > 0) {
               const end = sb.buffered.end(sb.buffered.length - 1)
-              if (end > 0.05 && videoRef.current) {
-                videoRef.current.currentTime = end
+              if (end > 0.02 && videoRef.current) {
+                // Seek to 20ms behind live edge for smooth start
+                videoRef.current.currentTime = end - 0.02
                 initialSeekDone = true
               }
             }
@@ -368,7 +374,7 @@ export const H264StreamPlayer = memo(function H264StreamPlayer({
               scale: scale,
               bitrateMbps: bitrateMbps,
               maxFps: fps,
-              keyframeSeconds: 1.0,
+              keyframeSeconds: 0.5,
             })
           )
         } catch {
