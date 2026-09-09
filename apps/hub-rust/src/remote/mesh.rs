@@ -11,7 +11,6 @@ use tracing::{error, info, warn};
 
 use crate::core::vault::Vault;
 
-const RATHOLE_TOKEN: &str = "meridian-rathole-2026";
 const VPS_ADDR: &str = "100.51.75.20:2333";
 
 #[derive(Debug, Clone)]
@@ -149,24 +148,28 @@ fn generate_client_config() -> String {
     format!(
         r#"[client]
 remote_addr = "{vps_addr}"
-default_token = "{token}"
 
 [client.services.wda]
 type = "tcp"
 local_addr = "127.0.0.1:8100"
 remote_addr = "0.0.0.0:18100"
+token = "{wda_token}"
 
 [client.services.bridge]
 type = "tcp"
 local_addr = "127.0.0.1:9001"
 remote_addr = "0.0.0.0:19001"
+token = "{bridge_token}"
 
 [client.services.stream]
 type = "tcp"
 local_addr = "127.0.0.1:9200"
 remote_addr = "0.0.0.0:19200"
+token = "{stream_token}"
 "#,
         vps_addr = VPS_ADDR,
-        token = RATHOLE_TOKEN,
+        wda_token = "meridian-wda-token",
+        bridge_token = "meridian-bridge-token",
+        stream_token = "meridian-stream-token",
     )
 }
