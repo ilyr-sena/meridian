@@ -44,6 +44,10 @@ dirs = "5.0"
 which = "7.0"
 chrono = "0.4"
 image = { version = "0.25", default-features = false, features = ["png"] }
+toml = "0.8"
+
+# Tunnel (rathole direct TCP)
+rathole = { version = "0.5", default-features = false, features = ["client"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = [

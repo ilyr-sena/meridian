@@ -20,8 +20,7 @@ use crate::device::monitor::{DeviceEvent, DeviceMonitor};
 use crate::device::tunnel::{start_tunnel, ActiveTunnel};
 use crate::remote::bridge::BridgeServer;
 use crate::remote::heartbeat::{send_offline_sync, sync_session_state, HeartbeatWorker};
-use crate::remote::key_fetcher::KeyFetcher;
-use crate::remote::mesh::{MeshStatus, MeshSupervisor};
+use crate::remote::mesh::{TunnelStatus, TunnelSupervisor};
 use crate::sideload::sideloader::{SideloadOptions, Sideloader};
 use crate::ui::dialogs::sideload::{view_sideload_modal, SideloadDialogState};
 use crate::ui::tabs::{
@@ -59,19 +58,15 @@ pub enum Message {
     SideloadFinished(Result<(), String>),
     CloseSideload,
     ToggleMask(bool),
-    KeyUrlChanged(String),
-    AuthKeyChanged(String),
     AnisetteChanged(String),
     AppleIdChanged(String),
-    RefreshKeyNow,
-    KeyRefreshed(Option<String>),
     SavePreferences,
     SelectLogLevel(LogLevel),
     LogSearchChanged(String),
     ClearLogs,
     AddLog(LogLevel, String),
     Tick,
-    MeshUpdated(MeshStatus),
+    TunnelUpdated(TunnelStatus),
     TitleAction(TitleBarAction),
 }
 
@@ -81,11 +76,10 @@ pub struct MeridianApp {
     active_tunnels: HashMap<String, Vec<Arc<ActiveTunnel>>>,
     active_heartbeats: HashMap<String, Arc<HeartbeatWorker>>,
     active_bridges: HashMap<String, Arc<BridgeServer>>,
-    shared_mesh_ip: Arc<std::sync::RwLock<Option<String>>>,
     slot_mgr: SlotManager,
     vault: Vault,
-    mesh_supervisor: Arc<MeshSupervisor>,
-    mesh_status: MeshStatus,
+    tunnel_supervisor: Arc<TunnelSupervisor>,
+    tunnel_status: TunnelStatus,
     logs: Vec<LogEntry>,
     log_level: LogLevel,
     log_search: String,
@@ -100,14 +94,12 @@ impl MeridianApp {
         let vault_data = vault.load();
 
         let slot_mgr = SlotManager::new();
-        let mesh_supervisor = Arc::new(MeshSupervisor::new(vault.clone()));
-        mesh_supervisor.start();
+        let tunnel_supervisor = Arc::new(TunnelSupervisor::new(vault.clone()));
+        tunnel_supervisor.start();
 
         let settings = SettingsState {
             mask_sensitive: vault_data.sensitive_data_masked,
-            tailscale_key_url: vault_data.tailscale_key_url.unwrap_or_else(|| "https://meridianhub.cc/api/mesh/authkey".to_string()),
-            tailscale_auth_key: vault_data.tailscale_auth_key.unwrap_or_default(),
-            anisette_url: vault_data.anisette_url.unwrap_or_else(|| "http://100.51.75.20:6969".to_string()),
+            anisette_url: vault_data.anisette_url.unwrap_or_else(|| "http://127.0.0.1:6969".to_string()),
             apple_id: vault_data.apple_id.unwrap_or_default(),
             is_saving: false,
         };
@@ -123,23 +115,16 @@ impl MeridianApp {
             is_busy: false,
         };
 
-        let shared_mesh_ip = Arc::new(std::sync::RwLock::new(None));
-
         let app = Self {
             active_tab: Tab::Devices,
             devices: Vec::new(),
             active_tunnels: HashMap::new(),
             active_heartbeats: HashMap::new(),
             active_bridges: HashMap::new(),
-            shared_mesh_ip,
             slot_mgr,
             vault,
-            mesh_supervisor,
-            mesh_status: MeshStatus {
-                is_running: false,
-                mesh_ip: None,
-                status_text: "Initializing mesh...".to_string(),
-            },
+            tunnel_supervisor,
+            tunnel_status: TunnelStatus::offline(),
             logs: vec![
                 LogEntry {
                     level: LogLevel::Info,
@@ -175,7 +160,6 @@ impl MeridianApp {
                     let session_active = Arc::new(std::sync::atomic::AtomicBool::new(false));
                     let hb = Arc::new(HeartbeatWorker::start(
                         report.clone(),
-                        self.shared_mesh_ip.clone(),
                         session_active,
                         None,
                     ));
@@ -261,12 +245,11 @@ impl MeridianApp {
                     dev.status_message = format!("Live Streaming on :{}", dev.ports.stream);
                     let ports = dev.ports;
                     let udid_clone = udid.clone();
-                    let mesh_ip = self.shared_mesh_ip.read().ok().and_then(|g| g.clone());
                     if let Some(hb) = self.active_heartbeats.get(&udid) {
                         hb.set_session_active(true);
                     }
                     tokio::spawn(async move {
-                        sync_session_state(&udid_clone, true, Some(ports), mesh_ip, None).await;
+                        sync_session_state(&udid_clone, true, Some(ports), None).await;
                     });
                 }
                 self.add_log(LogLevel::Info, format!("✓ Meridian session LIVE for {}", udid));
@@ -297,10 +280,9 @@ impl MeridianApp {
                 }
                 let dev_id = self.devices.iter().find(|d| d.udid == udid).map(|d| d.device_id).unwrap_or(0);
                 let udid_clone = udid.clone();
-                let mesh_ip = self.shared_mesh_ip.read().ok().and_then(|g| g.clone());
                 return Task::perform(async move {
                     // 1. Immediately inform cloud database that session stopped & clear host_ports
-                    sync_session_state(&udid_clone, false, None, mesh_ip, None).await;
+                    sync_session_state(&udid_clone, false, None, None).await;
                     // 2. Close the iOS runner app via CoreDevice
                     let _ = kill_meridian_runner(udid_clone, dev_id, None).await;
                     // 3. Navigate to homescreen via WDA
@@ -377,38 +359,15 @@ impl MeridianApp {
             Message::ToggleMask(val) => {
                 self.settings.mask_sensitive = val;
             }
-            Message::KeyUrlChanged(val) => {
-                self.settings.tailscale_key_url = val;
-            }
-            Message::AuthKeyChanged(val) => {
-                self.settings.tailscale_auth_key = val;
-            }
             Message::AnisetteChanged(val) => {
                 self.settings.anisette_url = val;
             }
             Message::AppleIdChanged(val) => {
                 self.settings.apple_id = val;
             }
-            Message::RefreshKeyNow => {
-                let vault = self.vault.clone();
-                return Task::perform(async move {
-                    let fetcher = KeyFetcher::new(vault);
-                    fetcher.fetch_active_key().await
-                }, Message::KeyRefreshed);
-            }
-            Message::KeyRefreshed(opt) => {
-                if let Some(key) = opt {
-                    self.settings.tailscale_auth_key = key;
-                    self.add_log(LogLevel::Info, "✓ Tailscale auth key refreshed from remote endpoint".to_string());
-                } else {
-                    self.add_log(LogLevel::Warn, "Could not fetch active auth key from endpoint".to_string());
-                }
-            }
             Message::SavePreferences => {
                 let mut data = self.vault.load();
                 data.sensitive_data_masked = self.settings.mask_sensitive;
-                data.tailscale_key_url = Some(self.settings.tailscale_key_url.clone());
-                data.tailscale_auth_key = if self.settings.tailscale_auth_key.is_empty() { None } else { Some(self.settings.tailscale_auth_key.clone()) };
                 data.anisette_url = Some(self.settings.anisette_url.clone());
                 data.apple_id = Some(self.settings.apple_id.clone());
                 let _ = self.vault.save(&data);
@@ -428,16 +387,13 @@ impl MeridianApp {
             }
             Message::Tick => {
                 self.uptime_secs += 1;
-                let mesh_sup = self.mesh_supervisor.clone();
+                let tunnel_sup = self.tunnel_supervisor.clone();
                 return Task::perform(async move {
-                    mesh_sup.get_status().await
-                }, Message::MeshUpdated);
+                    tunnel_sup.get_status().await
+                }, Message::TunnelUpdated);
             }
-            Message::MeshUpdated(status) => {
-                if let Ok(mut lock) = self.shared_mesh_ip.write() {
-                    *lock = status.mesh_ip.clone();
-                }
-                self.mesh_status = status;
+            Message::TunnelUpdated(status) => {
+                self.tunnel_status = status;
             }
             Message::TitleAction(action) => match action {
                 TitleBarAction::Minimize => {
@@ -463,7 +419,7 @@ impl MeridianApp {
 
     pub fn view(&self) -> Element<'_, Message> {
         let titlebar = view_titlebar(
-            self.mesh_status.mesh_ip.as_deref(),
+            self.tunnel_status.is_running,
             Message::TitleAction,
         );
 
@@ -478,7 +434,7 @@ impl MeridianApp {
         let nav_bar = container(
             row![
                 tab_btn(Tab::Devices, "Devices"),
-                tab_btn(Tab::Status, "Status & Mesh"),
+                tab_btn(Tab::Status, "Status & Tunnel"),
                 tab_btn(Tab::Logs, "Console Logs"),
                 tab_btn(Tab::Settings, "Settings"),
             ]
@@ -495,7 +451,7 @@ impl MeridianApp {
                 Message::OpenSideload,
             ),
             Tab::Status => view_status(
-                &self.mesh_status,
+                &self.tunnel_status,
                 &self.devices,
                 self.uptime_secs,
                 self.settings.mask_sensitive,
@@ -511,11 +467,8 @@ impl MeridianApp {
             Tab::Settings => view_settings(
                 &self.settings,
                 Message::ToggleMask,
-                Message::KeyUrlChanged,
-                Message::AuthKeyChanged,
                 Message::AnisetteChanged,
                 Message::AppleIdChanged,
-                Message::RefreshKeyNow,
                 Message::SavePreferences,
             ),
         };

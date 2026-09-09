@@ -64,180 +64,196 @@ During live remote sessions on `https://meridianhub.cc/` and `https://meridianhu
 - **Latency**:
   - Idle screen: `140 – 500 ms`
   - High screen movement: **Spikes to 10,000 ms (10 seconds!)**.
+- **720p Empirical Test Result**:
+  - Even after setting the stream resolution to 720p (`scale = 0.6`, `702 × 1520` pixels, 2.5 Mbps), **the stream did NOT become smoother or faster**.
+  - It remained at low FPS (5–21 FPS) and high latency.
+  - **Critical Engineering Insight**: This conclusively proves that nominal video resolution/bitrate alone is NOT the sole root bottleneck; the bottleneck lies in the transport layer between Host PC and VPS.
+
+### 2.1 The Definitive Proof: localhost vs VPS
+
+| Metric | localhost:9200 | meridianhub.cc:9200 |
+|--------|---------------|---------------------|
+| FPS | 60 (locked) | 5–21 (erratic) |
+| Latency | <30ms | 140–10,000ms |
+| Under motion | Smooth | 10,000ms spikes |
+| Codec | avc1.64002A (gpu) | avc1.64002A (gpu) |
+| Resolution | 720p | 720p |
+
+**The code is identical in both cases.** The only difference is the transport path. This conclusively proves the problem is architectural (transport layer), not code-level.
 
 ---
 
-## 3. Deep Root-Cause Analysis
+## 3. Root-Cause Analysis (Updated)
 
-The 10-second latency spike and FPS fluctuation are caused by **four compounding bottlenecks** across the transmission pipeline:
+### 3.1 PRIMARY: Tailscale DERP Relay Fallback
 
+The Host PC sits behind a residential NAT (Tenda router). When Tailscale cannot establish a direct UDP hole-punch between the Host PC (`100.93.183.86`) and the VPS (`100.127.117.36`):
+
+- All video traffic is routed through a public **Tailscale DERP relay server**.
+- DERP relays are geographically remote and explicitly rate-limited by Tailscale for streaming traffic.
+- Under motion bursts (when bitrate climbs), DERP buffers and delays TCP packets, driving latency from 140ms up to **10,000ms (10 seconds)**.
+
+This is the **single biggest bottleneck** and the reason the stream is slow.
+
+### 3.2 SECONDARY: VPS Memory Starvation (1 GB RAM)
+
+- **506 MB of Swap is actively in use**.
+- `vmstat 1 3` confirms continuous swap-in (`si: 53`) and swap-out (`so: 79`) operations.
+- Kernel socket buffers (`sk_sndbuf`, `sk_rcvbuf`) are aggressively throttled under low-memory conditions.
+- This compounds the DERP problem but is NOT the primary cause (localhost works fine on the same VPS).
+
+### 3.3 TERTIARY: No Congestion Control
+
+- WebSocket+TCP has no adaptive bitrate. Static 2.5 Mbps causes frame pileup on degraded networks.
+- WebRTC's GCC (Google Congestion Control) would solve this, but is a Phase 3 concern.
+
+---
+
+## 4. Confirmed Bottlenecks (Previously Identified, Now Prioritized)
+
+### 4.1 ~~Bottleneck A: Synchronous CoreImage GPU Scaling~~ (Mitigated)
+- `ciContext.render()` in `GPUScaler` takes 15–30ms per frame.
+- This was identified but the localhost test shows 60 FPS, meaning the GPU scaler is NOT the primary bottleneck in practice. The capture queue can handle the load when the transport is fast.
+
+### 4.2 ~~Bottleneck B: Unbounded Burst Sizes~~ (Patched)
+- `kVTCompressionPropertyKey_DataRateLimits` added to cap burst at 1.5× average bitrate.
+- This patch is in place and working.
+
+### 4.3 ~~Bottleneck C: WebSocket Queue Purge Storm~~ (Patched)
+- Outbox threshold relaxed from 2 frames to `15 frames or > 1.5 MB`.
+- This patch is in place and working.
+
+### 4.4 ~~Bottleneck D: In-Band Ping Serialization~~ (Acknowledged)
+- Ping messages queue behind video chunks on the same WebSocket.
+- Reported 10,000ms latency reflects TCP buffer backlog, not wire transit.
+- This is a symptom of the DERP/bandwidth bottleneck, not a separate issue.
+
+---
+
+## 5. Summary of Implemented Patches
+
+### 5.1 On-Device Runner (`runner/ProbeApp/`)
+1. **`TinyHTTPServer.swift`**: Relaxed outbox threshold from 2 frames to `15 frames or > 1.5 MB`.
+2. **`H264Stream.swift`**: Added `kVTCompressionPropertyKey_DataRateLimits` capped at 1.5× average bitrate.
+3. **`CaptureProbe.swift`**: Set `minimumFrameInterval = CMTime(1, 60)`, `queueDepth = 3`, `showsCursor = false`.
+4. **CI/CD**: Automated GitHub Actions build pipeline for `MeridianRunner-unsigned.ipa`.
+
+### 5.2 Host Hub (`apps/hub-rust/`)
+1. **`tunnel.rs`**: Enabled `set_nodelay(true)` on TCP sockets.
+2. **`actions.rs`**: WDA settings with `animationCoolOffTimeout = 0`, `waitForIdleTimeout = 0`.
+3. **`heartbeat.rs` & `app.rs`**: Dynamic Tailscale IP sync and session state management.
+
+### 5.3 VPS Infrastructure & Next.js (`apps/web/`)
+1. **Nginx SSL on :9200**: Secure Context for WebCodecs GPU decoding.
+2. **`h264-stream-player.tsx`**: Lowercase codec normalization, clean AVCC stripping, 5-tier fallback.
+3. **`phone-stage.tsx`**: `isDeviceActive` guard for clean teardown.
+
+### 5.4 Dynamic 720p Resolution
+1. WebSocket tuning command: `{"op":"tune","scale":0.6,"bitrateMbps":2.5,"maxFps":60,"keyframeSeconds":1.0}`
+2. Default scale changed from 1.0 to 0.6 (720p).
+3. `meridian-mesh` Go sidecar: Added `tc.SetNoDelay(true)`.
+
+---
+
+## 6. Current Engineering Decision
+
+### 6.1 What We Know
+
+The problem is **architectural, not code-level**. The entire pipeline works at 60 FPS / <30ms locally. The bottleneck is exclusively in the transport layer between Host PC and VPS.
+
+### 6.2 Decision: Replace Tailscale with Direct TCP Tunnel
+
+**Chosen solution**: rathole (Rust-native reverse proxy)
+
+**Why rathole:**
+- Hub-rust initiates **outbound** TCP to VPS (no NAT traversal issues, no UPnP, no port-forwarding)
+- Rust-native (~500KB binary, same language as hub-rust)
+- TCP_NODELAY by default, Noise Protocol encryption
+- ~2ms overhead
+- Handles reconnection and keepalive
+
+**Architecture**:
 ```
-[iPhone 13: 1170x2532 @ 60fps] 
-       │ (1) 8+ Mbps Motion Bursts (2.96 MP/frame = 177.6 MP/s)
-       ▼
-[usbmuxd Tunnel (:9200)]
-       │ (2) USB TCP Splicer (Nagle's buffering eliminated with TCP_NODELAY)
-       ▼
-[meridian-mesh (Go tsnet)] 
-       │ (3) Tailscale WireGuard userspace proxy
-       │     ⚠️ DERP Relay Fallback if Direct UDP P2P is blocked by NAT
-       ▼
-[Cloud VPS Nginx & Next.js]
-       │ (4) ⚠️ VPS Resource Starvation: 1 GB RAM, 506 MB Swap in active I/O,
-       │     kernel socket buffer throttling, burstable CPU credit depletion
-       ▼
-[Browser WebCodecs Canvas]
-       │ (5) Decoupled rAF rendering loop (fixed)
-       ▼
-[User Display]
+Host PC → rathole client (outbound) → VPS rathole server → Nginx → Browser
 ```
 
-### 3.1 Bottleneck 1: Resolution & Bitrate Mismatch (Host Upload Pipe Congestion)
-- **Native Resolution**: The iPhone 13 native bounds are `1170 × 2532` (~3.0 megapixels per frame). At 60 FPS, this generates **177.6 million raw pixels per second**.
-- **Bitrate Spikes**: When the screen is static, H.264 P-frames are tiny (~5 KB). When scrolling or moving, every frame contains widespread intra/inter-macroblock changes, causing the encoder to emit 50–150 KB per frame (spiking to 8–12 Mbps).
-- **Network Queue Accumulation**: If the residential upload bandwidth from the Host PC to the VPS is less than 8 Mbps (or has packet loss/jitter), the TCP socket send buffer fills up. At 8 Mbps, just 10 Megabytes of buffered packets creates a **10,000ms (10-second) backlog**.
-- **Evidence**: Latency only spikes to 10 seconds *when there is a lot of movement*.
+### 6.3 Roadmap
 
-### 3.2 Bottleneck 2: VPS Hardware Saturation (1 GB RAM / 2 vCPUs)
-- **Live Memory Inspection**:
-  ```
-                 total        used        free      shared  buff/cache   available
-  Mem:           939Mi       605Mi        96Mi        12Mi       387Mi       334Mi
-  Swap:          2.0Gi       506Mi       1.5Gi
-  ```
-  - **506 MB of Swap is actively in use**.
-  - `vmstat 1 3` showed active swap-in (`si: 53`) and swap-out (`so: 79`) operations.
-- **Process Memory Consumption**:
-  - `next-server (v16.2.6)`: ~163 MB RSS
-  - `mongod`: ~103 MB RSS
-  - `npm run start`: ~67 MB RSS
-  - `tailscaled`: ~50 MB RSS
-  - Two PM2 God Daemons (root + admin): ~54 MB RSS
-  - `journald` + `fail2ban`: ~40 MB RSS
-  - Nginx workers: ~40 MB RSS
-- **Impact on Video Streaming**:
-  - When Nginx proxies high-throughput WebSocket video (8 Mbps) on a system with < 100 MB free physical RAM, the Linux kernel encounters **major page faults** reading/writing from `/home/.swap` on NVMe.
-  - The kernel throttles TCP socket buffers (`sk_sndbuf`, `sk_rcvbuf`) under low-memory conditions, delaying TCP ACKs and collapsing the TCP congestion window (`cwnd`).
-  - AWS Lightsail $3.50 instances use **burstable CPU credits**. Sustained high CPU usage during Next.js builds and proxying throttles the vCPU to 10–20% of baseline.
+| Phase | Goal | Status |
+|-------|------|--------|
+| Phase 1 | Replace Tailscale with rathole direct TCP | **NEXT — Implementation starting** |
+| Phase 2 | VPS upgrade (1GB → 2GB+) | Deferred — only if Phase 1 insufficient |
+| Phase 3 | WebRTC SFU (mediasoup) | Deferred — only if Phase 1+2 insufficient |
 
-### 3.3 Bottleneck 3: Tailscale Mesh Traversal (DERP Relay vs P2P WireGuard)
-- Inspecting `sudo tailscale status` on the VPS revealed multiple ephemeral node registrations for the host PC (`meridian-sooku-pc-1`, `meridian-sooku-pc-2`).
-- The Host PC connects from behind a residential NAT router (Tenda router). If UDP hole-punching fails, Tailscale falls back to routing traffic through a **DERP relay server**.
-- Tailscale DERP relays are rate-limited and add geographical round-trip latency (bouncing packets through external relay nodes), introducing severe jitter and latency spikes under sustained video traffic.
-
-### 3.4 Bottleneck 4: WebSocket Queue Purge Storm in `TinyHTTPServer.swift` (Patched)
-- The on-device runner originally contained:
-  ```swift
-  if opcode == 0x2 && outbox.count >= 2 {
-      outbox.removeAll()
-      H264Stream.shared.requestKeyFrame()
-  }
-  ```
-- Because 60 FPS delivers a frame every 16.6ms, any normal TCP round-trip delay exceeding 20ms caused `outbox.count` to reach 2.
-- The server dropped all buffered frames and requested a massive IDR keyframe, creating a perpetual loop of keyframe floods and FPS collapse down to 5–20 FPS.
+Full plan: `docs/INFRASTRUCTURE_OVERHAUL.md`
 
 ---
 
-## 4. Summary of Implemented Patches
+## 7. Master Roadmap (Historical — Superseded by Section 6.3)
 
-### 4.1 On-Device Runner (`runner/ProbeApp/`)
-1. **`TinyHTTPServer.swift`**:
-   - Relaxed outbox threshold from 2 frames to `15 frames or > 1.5 MB`, preventing keyframe spam during transient network jitter.
-2. **`H264Stream.swift`**:
-   - Added `kVTCompressionPropertyKey_DataRateLimits` capped at 1.5× average bitrate (`Int(tuning.bitrateMbps * 1_000_000 * 1.5 / 8)`) to enforce a hard ceiling on burst sizes.
-   - Fixed multiline Swift string escape sequence in embedded web player path.
-3. **`CaptureProbe.swift`**:
-   - Set `cfg.minimumFrameInterval = CMTime(1, 60)`, `cfg.queueDepth = 3`, and `cfg.showsCursor = false` in ScreenCaptureKit to eliminate internal capture buffering.
-4. **`merge_probe_wda.py` & `.github/workflows/unified-runner.yml`**:
-   - Configured `IPHONEOS_DEPLOYMENT_TARGET = 18.0` for compatibility with Xcode 16 on `macos-15`.
-   - Automated GitHub Actions build pipeline successfully built and packaged `runner/prebuilt/MeridianRunner-unsigned.ipa` (6.8 MB).
+The original roadmap steps have been re-evaluated:
 
-### 4.2 Host Hub (`apps/hub-rust/`)
-1. **`tunnel.rs`**:
-   - Enabled `set_nodelay(true)` on accepted incoming TCP sockets and usbmuxd connections to disable Nagle's 40ms buffering delay.
-   - Added `Drop` implementation on `ActiveTunnel` to ensure listeners terminate immediately when sessions stop.
-2. **`actions.rs`**:
-   - Configured WDA settings with `animationCoolOffTimeout = 0`, `waitForIdleTimeout = 0`, and `snapshotTimeout = 0` (reducing touch delay from 2000ms to 10ms).
-   - Replaced multi-step tap fallback with direct zero-wait `wda/touch/perform`.
-3. **`heartbeat.rs` & `app.rs`**:
-   - Dynamically syncs real Tailscale IP and session state to MongoDB.
-   - Sets `host_ports: null` and marks sessions as `ended` when stopping.
+### ~~Step 1: 720p Downscaling~~ — COMPLETE
+- Stream default is now 720p. Dynamically applied over WebSocket.
 
-### 4.3 VPS Infrastructure & Next.js (`apps/web/`)
-1. **Nginx SSL Reverse Proxy for Port 9200**:
-   - Added an SSL listener on port 9200 (`/etc/nginx/sites-enabled/meridian.conf`) with Let's Encrypt certificate.
-   - Added HTTP error 497 auto-redirect (`http://...:9200` -> `https://meridianhub.cc:9200/`), ensuring browsers grant **Secure Context** status (`window.isSecureContext = true`) for WebCodecs GPU decoding.
-2. **`h264-stream-player.tsx`**:
-   - Lowercase codec normalization (`codec.toLowerCase()` -> `avc1.64002a`) satisfying RFC 6381 parser requirements.
-   - Clean AVCC description extraction (stripping 8-byte box headers).
-   - 5-tier fallback hierarchy for `VideoDecoder.configure()`.
-   - Decoupled `requestAnimationFrame` render loop synchronizing canvas paints with VSync.
-   - Silently drops delta frames until the first keyframe arrives.
-3. **`phone-stage.tsx`**:
-   - Removed deprecated AV1/codec badge.
-   - Enforced `isDeviceActive` guard for clean real-time teardown on session stop.
+### ~~Step 2: Ensure Direct P2P WireGuard~~ — SUPERSEDED
+- Instead of trying to fix Tailscale P2P, we are replacing Tailscale entirely with rathole direct TCP.
 
-### 4.4 Dynamic 720p Resolution & Low-Latency Tuning (Newly Implemented)
-1. **Dynamic WebSocket 720p Tuning in `h264-stream-player.tsx`**:
-   - On WebSocket connection (`ws.onopen`), the web player automatically sends a tuning command to the on-device runner:
-     ```json
-     {"op": "tune", "scale": 0.6, "bitrateMbps": 2.5, "maxFps": 60, "keyframeSeconds": 1.0}
-     ```
-   - Also listens to live `scale`, `fps`, and `bitrateMbps` prop updates, dispatching tune updates in real time without tearing down the WebSocket.
-2. **`phone-stage.tsx` Default Resolution**:
-   - Changed default scale from `1.0` (1170×2532, 2.96 MP) to `0.6` (**720p**, `702 × 1520` pixels), cutting raw pixel throughput by **62%**.
-   - Passed `scale={scale}`, `fps={fps}`, and `bitrateMbps={2.5}` to `H264StreamPlayer`.
-3. **Runner Default Stream Tuning (`H264Stream.swift`)**:
-   - Updated `StreamTuning` default values to `scale = 0.6`, `bitrateMbps = 2.5`, `maxFps = 60`, and `keyframeSeconds = 1.0`.
-   - Updated embedded web player default state in `playerHTML` to match.
-4. **`meridian-mesh` Go Sidecar (`sidecar/main.go`)**:
-   - Added `tc.SetNoDelay(true)` to local and remote TCP sockets in `handleProxy`, eliminating Nagle's algorithm delay in the tsnet WireGuard user proxy.
-   - Rebuilt production binary at `apps/hub-rust/dist/bin/meridian-mesh`.
+### ~~Step 3: Mitigate VPS Memory Saturation~~ — DEFERRED TO PHASE 2
+- VPS upgrade from 1 GB to 2 GB ($5/month) is deferred. Will only proceed if Phase 1 results are unsatisfactory.
+- Memory optimizations (swappiness, PM2 cleanup, MongoDB cache) will be applied as part of Phase 1.
+
+### ~~Step 4: Client-Side Drop-Behind~~ — NOT NEEDED
+- With a proper transport layer, this workaround should not be necessary.
 
 ---
 
-## 5. Master Roadmap to Achieve Locked 60 FPS & Sub-30ms Latency
+## 8. VPS Maintenance Commands
 
-To permanently eliminate the motion-induced latency spikes and lock the stream at 60 FPS, execute the following steps:
+### Quick Reference
+```bash
+# SSH into VPS
+ssh -i /home/sooku/Downloads/LightsailDefaultKey-us-east-1.pem admin@100.51.75.20
 
-### Step 1: 720p Downscaling & Adaptive Bitrate (Implemented)
-- **Status**: **COMPLETE**.
-- Stream default is now 720p (`0.6x` scale, 2.5 Mbps, 60 fps).
-- Dynamically applied over WebSocket on connect and on prop changes.
+# Check memory
+free -m
+vmstat 1 3
 
-### Step 2: Ensure Direct P2P WireGuard Connection (Bypass DERP Relay)
-- **Diagnostic Command** on VPS:
-  ```bash
-  sudo tailscale status
-  sudo tailscale ping 100.93.183.86
-  ```
-- If the output says `via DERP(...)` instead of `direct ...:41641`:
-  - Open UDP port `41641` on the Host PC's residential router (Port Forwarding / UPnP).
-  - Configure `tailscale` with `--port=41641` so direct peer-to-peer WireGuard tunnels can be established without bouncing through cloud relay servers.
+# Check swap usage
+cat /proc/swaps
 
-### Step 3: Mitigate VPS Memory Saturation & Swap Thrashing
-- **Root Cause**: The 939 MB RAM VPS has 506 MB of swap active, causing kernel socket buffer throttling and major page faults during high-throughput proxying.
-- **Actionable Steps**:
-  1. Kill dead root PM2 daemon: `sudo pm2 kill` (saves 22 MB RAM).
-  2. Optimize Next.js startup: Run `next start` directly rather than through `npm` wrapper (saves 67 MB RAM).
-  3. Lower Linux swappiness:
-     ```bash
-     echo 122 | sudo -S sysctl vm.swappiness=10
-     ```
-  4. Constrain MongoDB WiredTiger cache in `/etc/mongod.conf`:
-     ```yaml
-     storage:
-       wiredTiger:
-         engineConfig:
-           cacheSizeGB: 0.25
-     ```
-  5. **Strong Recommendation**: Upgrade VPS from 1 GB RAM to **2 GB RAM** ($5/month). Running Next.js 16 + MongoDB + Tailscale + Nginx on 939 MB leaves zero buffer cache for high-throughput video streaming.
+# PM2 management
+pm2 status
+pm2 restart meridian
+pm2 logs meridian
 
-### Step 4: Client-Side Drop-Behind Backlog Controller
-- In `apps/web/components/h264-stream-player.tsx`:
-  - If network lag causes a burst of > 3 chunks to arrive simultaneously, drop non-keyframes and fast-forward to the latest keyframe chunk:
-    ```typescript
-    if (naluDataQueue.length > 3) {
-        naluDataQueue = naluDataQueue.filter(chunk => chunk.isKey);
-    }
-    ```
+# Nginx
+sudo nginx -t && sudo systemctl reload nginx
+
+# MongoDB
+mongosh --eval "db.stats()" mongodb://127.0.0.1:27017/meridian
+
+# Tailscale (to be deprecated after Phase 1)
+sudo tailscale status
+sudo tailscale ping 100.93.183.86
+```
+
+---
+
+## 9. Network Topology
+
+### Current (Tailscale DERP)
+```
+Host PC (192.168.0.196) → Tenda Router (NAT) → ISP → Tailscale DERP Relay → VPS (100.51.75.20) → Browser
+```
+
+### Target (rathole Direct TCP)
+```
+Host PC (192.168.0.196) → Tenda Router (NAT) → ISP → VPS (100.51.75.20) → Browser
+                           (outbound TCP, no NAT traversal needed)
+```
+
+---
+
+*Last updated: 2026-09-08*
+*Status: Phase 1 implementation ready to begin*

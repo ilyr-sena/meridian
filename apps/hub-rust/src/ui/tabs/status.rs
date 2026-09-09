@@ -1,15 +1,15 @@
-//! Status Tab: live connection metrics, Tailscale VPN status, and port table.
+//! Status Tab: live connection metrics, rathole tunnel status, and port table.
 
 use iced::{
     widget::{column, container, row, scrollable, text, Space},
     Alignment, Color, Element, Length,
 };
 use crate::device::models::DeviceReport;
-use crate::remote::mesh::MeshStatus;
+use crate::remote::mesh::TunnelStatus;
 use crate::ui::theme::*;
 
 pub fn view_status<'a, Message>(
-    mesh: &'a MeshStatus,
+    tunnel: &'a TunnelStatus,
     devices: &'a [DeviceReport],
     uptime_secs: u64,
     mask_sensitive: bool,
@@ -24,26 +24,25 @@ where
         uptime_secs % 60
     );
 
-    // 1. Mesh Card
-    let mesh_ip_text = mesh.mesh_ip.as_deref().unwrap_or("Not assigned");
-    let mesh_card = container(
+    // 1. Tunnel Card
+    let tunnel_card = container(
         column![
-            text("TAILSCALE MESH OVERLAY")
+            text("RATHOLE DIRECT TUNNEL")
                 .font(FONT_SEMIBOLD)
                 .size(11)
                 .color(TEXT_MUTED),
             Space::new().height(8),
             row![
                 column![
-                    text("Mesh IP Address").font(FONT_REGULAR).size(12).color(TEXT_SECONDARY),
-                    text(mesh_ip_text).font(FONT_MONO).size(15).color(TEXT_PRIMARY),
+                    text("Tunnel State").font(FONT_REGULAR).size(12).color(TEXT_SECONDARY),
+                    text(&tunnel.status_text).font(FONT_MEDIUM).size(14).color(
+                        if tunnel.is_running { ACCENT_EMERALD } else { ACCENT_AMBER }
+                    ),
                 ],
                 Space::new().width(Length::Fill),
                 column![
-                    text("Connection State").font(FONT_REGULAR).size(12).color(TEXT_SECONDARY),
-                    text(&mesh.status_text).font(FONT_MEDIUM).size(14).color(
-                        if mesh.is_running { ACCENT_EMERALD } else { ACCENT_AMBER }
-                    ),
+                    text("VPS Endpoint").font(FONT_REGULAR).size(12).color(TEXT_SECONDARY),
+                    text("100.51.75.20:2333").font(FONT_MONO).size(14).color(TEXT_PRIMARY),
                 ],
                 Space::new().width(Length::Fill),
                 column![
@@ -112,7 +111,7 @@ where
     .style(style_card);
 
     scrollable(
-        column![mesh_card, sessions_card]
+        column![tunnel_card, sessions_card]
             .spacing(14)
     )
     .into()

@@ -15,7 +15,7 @@ pub enum TitleBarAction {
 }
 
 pub fn view_titlebar<'a, Message>(
-    mesh_ip: Option<&'a str>,
+    tunnel_online: bool,
     on_action: impl Fn(TitleBarAction) -> Message + 'a + Copy,
 ) -> Element<'a, Message>
 where
@@ -39,8 +39,8 @@ where
     .spacing(8)
     .align_y(Alignment::Center);
 
-    // 2. Mesh IP status pill
-    let mesh_indicator = if let Some(ip) = mesh_ip {
+    // 2. Tunnel status pill
+    let tunnel_indicator = if tunnel_online {
         container(
             row![
                 container(Space::new().width(6).height(6))
@@ -52,7 +52,7 @@ where
                         },
                         ..Default::default()
                     }),
-                text(ip)
+                text("Tunnel Online")
                     .font(FONT_MONO)
                     .size(11)
                     .color(TEXT_SECONDARY),
@@ -74,7 +74,7 @@ where
                         },
                         ..Default::default()
                     }),
-                text("Mesh Offline")
+                text("Tunnel Offline")
                     .font(FONT_MONO)
                     .size(11)
                     .color(TEXT_MUTED),
@@ -117,7 +117,7 @@ where
         row![
             title_badge,
             Space::new().width(16),
-            mesh_indicator,
+            tunnel_indicator,
             Space::new().width(Length::Fill),
             controls,
         ]

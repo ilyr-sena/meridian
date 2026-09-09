@@ -1,258 +1,172 @@
-//! Tailscale Userspace Mesh Supervisor (`meridian-mesh`).
+//! Rathole Direct TCP Tunnel Supervisor.
 //!
-//! Manages the perpetual Go sidecar process for zero-leak VPN connectivity.
+//! Manages the rathole client process for direct TCP forwarding from VPS to host PC.
+//! Replaces the previous Tailscale mesh sidecar (Go binary + DERP relay).
 
-use std::path::PathBuf;
-use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use tokio::io::{AsyncBufReadExt, BufReader};
-use tokio::process::{Child, Command};
-use tokio::sync::Mutex;
-use tracing::{debug, error, info, warn};
+use std::time::Duration;
+use tokio::sync::broadcast;
+use tracing::{error, info, warn};
 
 use crate::core::vault::Vault;
-use crate::remote::key_fetcher::KeyFetcher;
+
+const RATHOLE_TOKEN: &str = "meridian-rathole-2026";
+const VPS_ADDR: &str = "100.51.75.20:2333";
 
 #[derive(Debug, Clone)]
-pub struct MeshStatus {
+pub struct TunnelStatus {
     pub is_running: bool,
-    pub mesh_ip: Option<String>,
     pub status_text: String,
 }
 
-pub struct MeshSupervisor {
-    vault: Vault,
-    status: Arc<Mutex<MeshStatus>>,
-    child: Arc<Mutex<Option<Child>>>,
-    should_run: Arc<AtomicBool>,
+impl TunnelStatus {
+    pub fn offline() -> Self {
+        Self {
+            is_running: false,
+            status_text: "Initializing tunnel...".to_string(),
+        }
+    }
 }
 
-impl MeshSupervisor {
-    pub fn new(vault: Vault) -> Self {
+pub struct TunnelSupervisor {
+    status: Arc<tokio::sync::Mutex<TunnelStatus>>,
+    should_run: Arc<AtomicBool>,
+    shutdown_tx: broadcast::Sender<bool>,
+}
+
+impl TunnelSupervisor {
+    pub fn new(_vault: Vault) -> Self {
+        let (shutdown_tx, _) = broadcast::channel(1);
         Self {
-            vault,
-            status: Arc::new(Mutex::new(MeshStatus {
-                is_running: false,
-                mesh_ip: None,
-                status_text: "Initializing mesh...".to_string(),
-            })),
-            child: Arc::new(Mutex::new(None)),
+            status: Arc::new(tokio::sync::Mutex::new(TunnelStatus::offline())),
             should_run: Arc::new(AtomicBool::new(true)),
+            shutdown_tx,
         }
     }
 
-    pub async fn get_status(&self) -> MeshStatus {
-        let lock = self.status.lock().await;
-        lock.clone()
+    pub async fn get_status(&self) -> TunnelStatus {
+        self.status.lock().await.clone()
     }
 
     pub fn start(&self) {
-        let vault = self.vault.clone();
         let status = self.status.clone();
-        let child_arc = self.child.clone();
         let should_run = self.should_run.clone();
+        let shutdown_tx = self.shutdown_tx.clone();
 
         tokio::spawn(async move {
-            let key_fetcher = KeyFetcher::new(vault);
-
-            while should_run.load(Ordering::SeqCst) {
-                // 1. Locate meridian-mesh binary
-                let bin_path = find_mesh_binary();
-                if bin_path.is_none() {
-                    let mut st = status.lock().await;
-                    st.status_text = "meridian-mesh binary not found in bin/".to_string();
-                    warn!("{}", st.status_text);
-                    tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
-                    continue;
-                }
-                let bin_path = bin_path.unwrap();
-
-                // 2. Fetch active auth key
-                let auth_key = key_fetcher.fetch_active_key().await;
-
-                // 3. Prepare state directory
-                let state_dir = dirs::data_local_dir()
-                    .unwrap_or_else(|| PathBuf::from("."))
-                    .join("meridian")
-                    .join("mesh");
-                let _ = std::fs::create_dir_all(&state_dir);
-
-                info!("Starting meridian-mesh sidecar from {:?} ...", bin_path);
-
-                let mut cmd = Command::new(&bin_path);
-                cmd.arg("-dir").arg(&state_dir);
-
-                let machine_host = get_machine_hostname();
-                cmd.arg("-hostname").arg(&machine_host);
-                info!("Using Tailscale mesh node hostname: {}", machine_host);
-
-                if let Some(ref key) = auth_key {
-                    cmd.arg("-authkey").arg(key);
-                }
-
-                #[cfg(windows)]
-                {
-                    // Avoid opening console windows on Windows
-                    cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
-                }
-
-                cmd.stdout(Stdio::piped());
-                cmd.stderr(Stdio::piped());
-
-                match cmd.spawn() {
-                    Ok(mut spawned) => {
-                        {
-                            let mut st = status.lock().await;
-                            st.is_running = true;
-                            st.status_text = "Connecting to Tailscale...".to_string();
-                        }
-
-                        let stdout = spawned.stdout.take().unwrap();
-                        let stderr = spawned.stderr.take().unwrap();
-
-                        let parse_line = |line: &str, status_ref: Arc<Mutex<MeshStatus>>| {
-                            if line.contains("100.") {
-                                for word in line.split_whitespace() {
-                                    if word.starts_with("100.") && word.split('.').count() == 4 {
-                                        let ip = word.trim_matches(|c: char| !c.is_ascii_digit() && c != '.');
-                                        let ip_owned = ip.to_string();
-                                        let status_task = status_ref.clone();
-                                        tokio::spawn(async move {
-                                            let mut st = status_task.lock().await;
-                                            st.mesh_ip = Some(ip_owned.clone());
-                                            st.status_text = format!("Online ({})", ip_owned);
-                                            info!("✓ Tailscale Mesh IP assigned: {}", ip_owned);
-                                        });
-                                    }
-                                }
-                            }
-                        };
-
-                        let status_out = status.clone();
-                        tokio::spawn(async move {
-                            let mut reader = BufReader::new(stdout).lines();
-                            while let Ok(Some(line)) = reader.next_line().await {
-                                debug!("[mesh stdout] {}", line);
-                                parse_line(&line, status_out.clone());
-                            }
-                        });
-
-                        let status_err = status.clone();
-                        tokio::spawn(async move {
-                            let mut reader = BufReader::new(stderr).lines();
-                            while let Ok(Some(line)) = reader.next_line().await {
-                                debug!("[mesh stderr] {}", line);
-                                parse_line(&line, status_err.clone());
-                            }
-                        });
-
-                        *child_arc.lock().await = Some(spawned);
-
-                        // Wait for process completion
-                        while let Some(ref mut c) = *child_arc.lock().await {
-                            match c.try_wait() {
-                                Ok(Some(exit_status)) => {
-                                    warn!("meridian-mesh exited with status: {}", exit_status);
-                                    break;
-                                }
-                                Ok(None) => {
-                                    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-                                }
-                                Err(e) => {
-                                    error!("Error awaiting meridian-mesh: {:?}", e);
-                                    break;
-                                }
-                            }
-                        }
-
-                        {
-                            let mut st = status.lock().await;
-                            st.is_running = false;
-                            st.mesh_ip = None;
-                            st.status_text = "Mesh offline. Reconnecting in 3s...".to_string();
-                        }
-                    }
-                    Err(e) => {
-                        error!("Failed to spawn meridian-mesh: {:?}", e);
-                        let mut st = status.lock().await;
-                        st.status_text = format!("Launch failed: {}", e);
-                    }
-                }
-
-                tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
-            }
+            run_rathole_loop(status, should_run, shutdown_tx).await;
         });
     }
 
     pub async fn stop(&self) {
         self.should_run.store(false, Ordering::SeqCst);
-        if let Some(mut child) = self.child.lock().await.take() {
-            info!("Stopping meridian-mesh sidecar...");
-            let _ = child.kill().await;
-        }
+        let _ = self.shutdown_tx.send(true);
     }
 }
 
-fn find_mesh_binary() -> Option<PathBuf> {
-    let binary_name = if cfg!(windows) { "meridian-mesh.exe" } else { "meridian-mesh" };
+async fn run_rathole_loop(
+    status: Arc<tokio::sync::Mutex<TunnelStatus>>,
+    should_run: Arc<AtomicBool>,
+    shutdown_tx: broadcast::Sender<bool>,
+) {
+    while should_run.load(Ordering::SeqCst) {
+        let config_toml = generate_client_config();
+        let tmp_path = std::env::temp_dir().join("meridian-rathole-client.toml");
 
-    // 1. Next to current executable or in exe_dir/bin
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(parent) = exe.parent() {
-            let candidate = parent.join(binary_name);
-            if candidate.exists() { return Some(candidate); }
-            let candidate_bin = parent.join("bin").join(binary_name);
-            if candidate_bin.exists() { return Some(candidate_bin); }
-            if let Some(grandparent) = parent.parent() {
-                let candidate_up_bin = grandparent.join("bin").join(binary_name);
-                if candidate_up_bin.exists() { return Some(candidate_up_bin); }
+        if let Err(e) = std::fs::write(&tmp_path, &config_toml) {
+            error!("Failed to write rathole config to {:?}: {:?}", tmp_path, e);
+            {
+                let mut st = status.lock().await;
+                st.status_text = format!("Config write failed: {}", e);
+            }
+            tokio::time::sleep(Duration::from_secs(5)).await;
+            continue;
+        }
+
+        {
+            let mut st = status.lock().await;
+            st.is_running = false;
+            st.status_text = "Connecting to VPS...".to_string();
+        }
+
+        info!("Starting rathole client → {}", VPS_ADDR);
+
+        let shutdown_rx = shutdown_tx.subscribe();
+        let cli = rathole::Cli {
+            config_path: Some(tmp_path.clone()),
+            server: false,
+            client: true,
+            genkey: None,
+        };
+
+        let rathole_handle = tokio::spawn(async move {
+            if let Err(e) = rathole::run(cli, shutdown_rx).await {
+                error!("rathole client exited with error: {:?}", e);
+            }
+        });
+
+        {
+            let mut st = status.lock().await;
+            st.is_running = true;
+            st.status_text = "Tunnel online (rathole)".to_string();
+        }
+        info!("✓ rathole client connected to {}", VPS_ADDR);
+
+        // Wait for shutdown signal or rathole exit
+        tokio::select! {
+            _ = rathole_handle => {
+                warn!("rathole process exited, restarting in 3s...");
+            }
+            _ = should_run_changed(&should_run) => {
+                info!("Tunnel supervisor shutting down");
+                break;
             }
         }
+
+        {
+            let mut st = status.lock().await;
+            st.is_running = false;
+            st.status_text = "Reconnecting in 3s...".to_string();
+        }
+
+        tokio::time::sleep(Duration::from_secs(3)).await;
     }
 
-    // 2. Relative to working directory
-    for rel_dir in &["bin", "apps/hub-rust/bin", "apps/hub/bin"] {
-        let candidate = PathBuf::from(rel_dir).join(binary_name);
-        if candidate.exists() { return Some(candidate); }
-    }
-
-    which::which(binary_name).ok()
+    let _ = std::fs::remove_file(std::env::temp_dir().join("meridian-rathole-client.toml"));
 }
 
-fn get_machine_hostname() -> String {
-    // 1. Try env HOSTNAME or COMPUTERNAME
-    if let Ok(h) = std::env::var("HOSTNAME") {
-        if !h.trim().is_empty() {
-            return sanitize_hostname(&format!("meridian-{}", h.trim()));
+async fn should_run_changed(flag: &Arc<AtomicBool>) {
+    loop {
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        if !flag.load(Ordering::SeqCst) {
+            return;
         }
     }
-    if let Ok(h) = std::env::var("COMPUTERNAME") {
-        if !h.trim().is_empty() {
-            return sanitize_hostname(&format!("meridian-{}", h.trim()));
-        }
-    }
-
-    // 2. Try /etc/hostname on Linux
-    if let Ok(h) = std::fs::read_to_string("/etc/hostname") {
-        if !h.trim().is_empty() {
-            return sanitize_hostname(&format!("meridian-{}", h.trim()));
-        }
-    }
-
-    "meridian-hub".to_string()
 }
 
-fn sanitize_hostname(s: &str) -> String {
-    let clean: String = s
-        .to_lowercase()
-        .chars()
-        .filter(|c| c.is_ascii_alphanumeric() || *c == '-')
-        .collect();
-    let trimmed = clean.trim_matches('-');
-    if trimmed.is_empty() {
-        "meridian-hub".to_string()
-    } else {
-        trimmed.to_string()
-    }
+fn generate_client_config() -> String {
+    format!(
+        r#"[client]
+remote_addr = "{vps_addr}"
+default_token = "{token}"
+
+[client.services.wda]
+type = "tcp"
+local_addr = "127.0.0.1:8100"
+remote_addr = "0.0.0.0:18100"
+
+[client.services.bridge]
+type = "tcp"
+local_addr = "127.0.0.1:9001"
+remote_addr = "0.0.0.0:19001"
+
+[client.services.stream]
+type = "tcp"
+local_addr = "127.0.0.1:9200"
+remote_addr = "0.0.0.0:19200"
+"#,
+        vps_addr = VPS_ADDR,
+        token = RATHOLE_TOKEN,
+    )
 }

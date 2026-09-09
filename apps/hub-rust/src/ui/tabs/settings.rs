@@ -1,4 +1,4 @@
-//! Settings Tab: Tailscale dynamic key URLs, sensitive data masking, and sideload configs.
+//! Settings Tab: sensitive data masking and sideload configs.
 
 use iced::{
     widget::{button, checkbox, column, container, row, scrollable, text, text_input, Space},
@@ -9,8 +9,6 @@ use crate::ui::theme::*;
 #[derive(Debug, Clone)]
 pub struct SettingsState {
     pub mask_sensitive: bool,
-    pub tailscale_key_url: String,
-    pub tailscale_auth_key: String,
     pub anisette_url: String,
     pub apple_id: String,
     pub is_saving: bool,
@@ -19,11 +17,8 @@ pub struct SettingsState {
 pub fn view_settings<'a, Message>(
     state: &'a SettingsState,
     on_toggle_mask: impl Fn(bool) -> Message + 'a + Copy,
-    on_key_url_change: impl Fn(String) -> Message + 'a + Copy,
-    on_auth_key_change: impl Fn(String) -> Message + 'a + Copy,
     on_anisette_change: impl Fn(String) -> Message + 'a + Copy,
     on_apple_id_change: impl Fn(String) -> Message + 'a + Copy,
-    on_refresh_key: Message,
     on_save: Message,
 ) -> Element<'a, Message>
 where
@@ -55,49 +50,7 @@ where
     )
     .style(style_card);
 
-    // 2. Tailscale Mesh Section
-    let tailscale_section = container(
-        column![
-            text("TAILSCALE MESH CONFIGURATION")
-                .font(FONT_SEMIBOLD)
-                .size(11)
-                .color(TEXT_MUTED),
-            Space::new().height(10),
-            text("Dynamic Key Source URL (auto-fetched to avoid 90-day expiry):")
-                .font(FONT_REGULAR)
-                .size(12)
-                .color(TEXT_SECONDARY),
-            Space::new().height(4),
-            row![
-                text_input("https://meridianhub.cc/api/mesh/authkey", &state.tailscale_key_url)
-                    .on_input(on_key_url_change)
-                    .padding(8)
-                    .size(12)
-                    .style(style_text_input),
-                button(text("Fetch Key Now").font(FONT_MEDIUM).size(11))
-                    .padding([8, 14])
-                    .on_press(on_refresh_key)
-                    .style(style_button_secondary),
-            ]
-            .spacing(8),
-            Space::new().height(12),
-            text("Manual Tailscale Auth Key (optional local override):")
-                .font(FONT_REGULAR)
-                .size(12)
-                .color(TEXT_SECONDARY),
-            Space::new().height(4),
-            text_input("tskey-auth-...", &state.tailscale_auth_key)
-                .on_input(on_auth_key_change)
-                .padding(8)
-                .size(12)
-                .secure(true)
-                .style(style_text_input),
-        ]
-        .padding(16)
-    )
-    .style(style_card);
-
-    // 3. Sideloading Section
+    // 2. Sideloading Section
     let sideload_section = container(
         column![
             text("SIDELOADING & DEVELOPER PORTAL")
@@ -110,7 +63,7 @@ where
                 .size(12)
                 .color(TEXT_SECONDARY),
             Space::new().height(4),
-            text_input("http://100.51.75.20:6969", &state.anisette_url)
+            text_input("http://127.0.0.1:6969", &state.anisette_url)
                 .on_input(on_anisette_change)
                 .padding(8)
                 .size(12)
@@ -131,7 +84,7 @@ where
     )
     .style(style_card);
 
-    // 4. Save Button
+    // 3. Save Button
     let btn_save = button(text("Save Preferences").font(FONT_MEDIUM).size(13))
         .padding([8, 24])
         .on_press(on_save)
@@ -140,7 +93,6 @@ where
     scrollable(
         column![
             privacy_section,
-            tailscale_section,
             sideload_section,
             row![Space::new().width(Length::Fill), btn_save],
         ]

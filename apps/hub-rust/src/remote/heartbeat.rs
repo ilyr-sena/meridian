@@ -1,7 +1,7 @@
 //! Device presence and heartbeat sync worker with Meridian cloud API.
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 use std::time::Duration;
 use serde_json::json;
 use tracing::{debug, info};
@@ -20,7 +20,6 @@ pub struct HeartbeatWorker {
 impl HeartbeatWorker {
     pub fn start(
         report: DeviceReport,
-        shared_mesh_ip: Arc<RwLock<Option<String>>>,
         session_active: Arc<AtomicBool>,
         api_url: Option<String>,
     ) -> Self {
@@ -40,10 +39,6 @@ impl HeartbeatWorker {
             info!("Starting cloud heartbeat for device {} -> {}", report.udid, endpoint);
 
             while flag.load(Ordering::SeqCst) {
-                let current_mesh_ip = {
-                    shared_mesh_ip.read().ok().and_then(|guard| guard.clone())
-                };
-
                 let active = is_session_active.load(Ordering::SeqCst);
                 let host_ports = if active {
                     json!({
@@ -61,8 +56,6 @@ impl HeartbeatWorker {
                     "model": report.model,
                     "version": report.os_version,
                     "build": report.build_version,
-                    "tailscale_ip": current_mesh_ip,
-                    "mesh_ip": current_mesh_ip,
                     "host_ports": host_ports,
                     "status": "online",
                     "session_active": active,
@@ -114,7 +107,6 @@ pub async fn sync_session_state(
     udid: &str,
     active: bool,
     ports: Option<DevicePorts>,
-    mesh_ip: Option<String>,
     api_url: Option<&str>,
 ) {
     let base_url = api_url.unwrap_or(DEFAULT_API_URL);
@@ -141,8 +133,6 @@ pub async fn sync_session_state(
         let mut payload = json!({
             "udid": udid,
             "status": "online",
-            "tailscale_ip": mesh_ip,
-            "mesh_ip": mesh_ip,
             "host_ports": host_ports,
             "session_active": active,
             "timestamp": chrono::Utc::now().to_rfc3339(),
@@ -188,3 +178,4 @@ pub async fn send_offline_sync(udid: &str, api_url: Option<&str>) {
         debug!("Sent offline presence update for {}", udid);
     }
 }
+

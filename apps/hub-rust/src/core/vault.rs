@@ -23,8 +23,6 @@ pub struct VaultData {
     pub apple_id: Option<String>,
     pub password: Option<String>,
     pub anisette_url: Option<String>,
-    pub tailscale_key_url: Option<String>,
-    pub tailscale_auth_key: Option<String>,
     pub sensitive_data_masked: bool,
     pub auto_start_devices: bool,
     pub custom_settings: HashMap<String, String>,
