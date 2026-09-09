@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::broadcast;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::core::vault::Vault;
 
@@ -53,7 +53,9 @@ impl TunnelSupervisor {
         let should_run = self.should_run.clone();
         let shutdown_tx = self.shutdown_tx.clone();
 
+        info!("[TUNNEL] TunnelSupervisor::start() called — spawning rathole loop");
         tokio::spawn(async move {
+            info!("[TUNNEL] Background task spawned, entering run_rathole_loop");
             run_rathole_loop(status, should_run, shutdown_tx).await;
         });
     }
@@ -69,12 +71,18 @@ async fn run_rathole_loop(
     should_run: Arc<AtomicBool>,
     shutdown_tx: broadcast::Sender<bool>,
 ) {
+    info!("[TUNNEL] run_rathole_loop entered");
+
+    // Write config once for diagnostics
+    let config_toml = generate_client_config();
+    info!("[TUNNEL] Generated client config:\n{}", config_toml);
+
     while should_run.load(Ordering::SeqCst) {
         let config_toml = generate_client_config();
         let tmp_path = std::env::temp_dir().join("meridian-rathole-client.toml");
 
         if let Err(e) = std::fs::write(&tmp_path, &config_toml) {
-            error!("Failed to write rathole config to {:?}: {:?}", tmp_path, e);
+            error!("[TUNNEL] Failed to write config to {:?}: {:?}", tmp_path, e);
             {
                 let mut st = status.lock().await;
                 st.status_text = format!("Config write failed: {}", e);
@@ -82,6 +90,7 @@ async fn run_rathole_loop(
             tokio::time::sleep(Duration::from_secs(5)).await;
             continue;
         }
+        debug!("[TUNNEL] Config written to {:?}", tmp_path);
 
         {
             let mut st = status.lock().await;
@@ -89,7 +98,7 @@ async fn run_rathole_loop(
             st.status_text = "Connecting to VPS...".to_string();
         }
 
-        info!("Starting rathole client → {}", VPS_ADDR);
+        info!("[TUNNEL] Starting rathole client → {}", VPS_ADDR);
 
         let shutdown_rx = shutdown_tx.subscribe();
         let cli = rathole::Cli {
@@ -98,27 +107,34 @@ async fn run_rathole_loop(
             client: true,
             genkey: None,
         };
+        debug!("[TUNNEL] Cli struct created: {:?}", cli);
 
         let rathole_handle = tokio::spawn(async move {
-            if let Err(e) = rathole::run(cli, shutdown_rx).await {
-                error!("rathole client exited with error: {:?}", e);
+            info!("[TUNNEL] rathole::run() calling...");
+            let result = rathole::run(cli, shutdown_rx).await;
+            info!("[TUNNEL] rathole::run() returned: {:?}", result);
+            if let Err(e) = result {
+                error!("[TUNNEL] rathole client error: {:?}", e);
             }
         });
+
+        // Give rathole a moment to connect before marking online
+        tokio::time::sleep(Duration::from_millis(500)).await;
 
         {
             let mut st = status.lock().await;
             st.is_running = true;
             st.status_text = "Tunnel online (rathole)".to_string();
         }
-        info!("✓ rathole client connected to {}", VPS_ADDR);
+        info!("[TUNNEL] ✓ Marked as online, waiting for rathole to exit or shutdown signal");
 
         // Wait for shutdown signal or rathole exit
         tokio::select! {
             _ = rathole_handle => {
-                warn!("rathole process exited, restarting in 3s...");
+                warn!("[TUNNEL] rathole process exited, restarting in 3s...");
             }
             _ = should_run_changed(&should_run) => {
-                info!("Tunnel supervisor shutting down");
+                info!("[TUNNEL] Tunnel supervisor shutting down");
                 break;
             }
         }
@@ -133,6 +149,7 @@ async fn run_rathole_loop(
     }
 
     let _ = std::fs::remove_file(std::env::temp_dir().join("meridian-rathole-client.toml"));
+    info!("[TUNNEL] run_rathole_loop exited");
 }
 
 async fn should_run_changed(flag: &Arc<AtomicBool>) {
@@ -151,21 +168,18 @@ remote_addr = "{vps_addr}"
 
 [client.services.wda]
 type = "tcp"
-local_addr = "127.0.0.1:8100"
-remote_addr = "0.0.0.0:18100"
 token = "{wda_token}"
+local_addr = "127.0.0.1:8100"
 
 [client.services.bridge]
 type = "tcp"
-local_addr = "127.0.0.1:9001"
-remote_addr = "0.0.0.0:19001"
 token = "{bridge_token}"
+local_addr = "127.0.0.1:9001"
 
 [client.services.stream]
 type = "tcp"
-local_addr = "127.0.0.1:9200"
-remote_addr = "0.0.0.0:19200"
 token = "{stream_token}"
+local_addr = "127.0.0.1:9200"
 "#,
         vps_addr = VPS_ADDR,
         wda_token = "meridian-wda-token",
