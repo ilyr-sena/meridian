@@ -485,6 +485,8 @@ async fn fetch_apps(udid: Arc<String>, device_id: u32) -> anyhow::Result<Vec<ser
 }
 
 async fn fetch_running_processes(udid: Arc<String>, device_id: u32) -> anyhow::Result<Vec<serde_json::Value>> {
+    crate::device::ddi::ensure_developer_image_mounted(&udid, device_id).await?;
+
     let provider = UsbmuxdProvider {
         addr: UsbmuxdAddr::default(),
         tag: 1,
@@ -551,6 +553,8 @@ async fn fetch_icon(udid: Arc<String>, device_id: u32, bundle_id: String) -> any
 }
 
 async fn launch_app(udid: Arc<String>, device_id: u32, bundle_id: String) -> anyhow::Result<u32> {
+    crate::device::ddi::ensure_developer_image_mounted(&udid, device_id).await?;
+
     let provider = UsbmuxdProvider {
         addr: UsbmuxdAddr::default(),
         tag: 1,
