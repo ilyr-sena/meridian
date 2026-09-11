@@ -9,7 +9,7 @@ use tracing::{debug, info};
 use crate::core::slots::DevicePorts;
 use crate::device::models::DeviceReport;
 
-pub const DEFAULT_API_URL: &str = "https://www.meridianhub.cc";
+pub const DEFAULT_API_URL: &str = "https://meridianhub.cc";
 
 #[derive(Debug)]
 pub struct HeartbeatWorker {
