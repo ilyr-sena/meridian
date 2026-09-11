@@ -135,10 +135,15 @@ async fn invoke_native_launch(udid: &str, device_id: u32, bundle_id: &str) -> an
             let rsd_stream = handle.connect(rsd_port).await?;
             let rsd = RsdHandshake::new(rsd_stream).await?;
 
+            debug!("RSD services: {:?}", rsd.services.keys().collect::<Vec<_>>());
+            for (name, entry) in &rsd.services {
+                debug!("  RSD service: {} -> port {}", name, entry.port);
+            }
+
             let app_entry = rsd
                 .services
                 .get("com.apple.coredevice.appservice")
-                .ok_or_else(|| anyhow::anyhow!("CoreDevice AppService not advertised on RSD"))?;
+                .ok_or_else(|| anyhow::anyhow!("CoreDevice AppService not advertised on RSD. Available: {:?}", rsd.services.keys().collect::<Vec<_>>()))?;
 
             let app_stream = handle.connect(app_entry.port).await?;
             let mut app_service = AppServiceClient::new(app_stream).await?;

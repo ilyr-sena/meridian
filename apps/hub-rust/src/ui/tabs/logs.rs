@@ -28,6 +28,7 @@ pub fn view_logs<'a, Message>(
     on_select_level: impl Fn(LogLevel) -> Message + 'a + Copy,
     on_search_change: impl Fn(String) -> Message + 'a + Copy,
     on_clear: Message,
+    on_copy: Message,
 ) -> Element<'a, Message>
 where
     Message: 'a + Clone,
@@ -61,10 +62,16 @@ where
         .on_press(on_clear)
         .style(style_button_secondary);
 
+    let btn_copy = button(text("Copy").font(FONT_MEDIUM).size(11))
+        .padding([4, 12])
+        .on_press(on_copy)
+        .style(style_button_secondary);
+
     let toolbar = row![
         level_bar,
         Space::new().width(Length::Fill),
         search_input,
+        btn_copy,
         btn_clear,
     ]
     .spacing(8)

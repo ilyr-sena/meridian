@@ -64,6 +64,7 @@ pub enum Message {
     SelectLogLevel(LogLevel),
     LogSearchChanged(String),
     ClearLogs,
+    CopyLogs,
     AddLog(LogLevel, String),
     Tick,
     TunnelUpdated(TunnelStatus),
@@ -382,6 +383,15 @@ impl MeridianApp {
             Message::ClearLogs => {
                 self.logs.clear();
             }
+            Message::CopyLogs => {
+                let text: String = self
+                    .logs
+                    .iter()
+                    .map(|e| format!("[{}] {}", e.timestamp, e.message))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                return iced::clipboard::write(text);
+            }
             Message::AddLog(level, msg) => {
                 self.add_log(level, msg);
             }
@@ -464,6 +474,7 @@ impl MeridianApp {
                 Message::SelectLogLevel,
                 Message::LogSearchChanged,
                 Message::ClearLogs,
+                Message::CopyLogs,
             ),
             Tab::Settings => view_settings(
                 &self.settings,
