@@ -132,13 +132,37 @@ async fn invoke_native_launch(udid: &str, device_id: u32, bundle_id: &str) -> an
             let adapter = proxy.create_software_tunnel()?;
             let mut handle = adapter.to_async_handle();
 
-            let rsd_stream = handle.connect(rsd_port).await?;
-            let rsd = RsdHandshake::new(rsd_stream).await?;
-
-            debug!("RSD services: {:?}", rsd.services.keys().collect::<Vec<_>>());
-            for (name, entry) in &rsd.services {
-                debug!("  RSD service: {} -> port {}", name, entry.port);
+            // Retry RSD handshake up to 3 times with delay
+            let mut rsd = None;
+            for attempt in 1..=3u32 {
+                tokio::time::sleep(Duration::from_millis(500 * u64::from(attempt))).await;
+                match handle.connect(rsd_port).await {
+                    Ok(rsd_stream) => {
+                        match RsdHandshake::new(rsd_stream).await {
+                            Ok(r) => {
+                                debug!("RSD attempt {} succeeded with {} services", attempt, r.services.len());
+                                for (name, entry) in &r.services {
+                                    debug!("  RSD service: {} -> port {}", name, entry.port);
+                                }
+                                if r.services.contains_key("com.apple.coredevice.appservice") {
+                                    rsd = Some(r);
+                                    break;
+                                }
+                                warn!("RSD attempt {}: appservice not in services list, retrying...", attempt);
+                                rsd = Some(r); // keep last result for error message
+                            }
+                            Err(e) => {
+                                warn!("RSD attempt {} handshake failed: {:?}", attempt, e);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        warn!("RSD attempt {} connect failed: {:?}", attempt, e);
+                    }
+                }
             }
+
+            let rsd = rsd.ok_or_else(|| anyhow::anyhow!("Failed to establish RSD connection after 3 attempts"))?;
 
             let app_entry = rsd
                 .services
