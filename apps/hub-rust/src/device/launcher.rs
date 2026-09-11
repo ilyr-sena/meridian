@@ -42,6 +42,13 @@ async fn launch_meridian_runner_inner(
     let target_bundle = bundle_id_hint.unwrap_or_else(|| DEFAULT_RUNNER_BUNDLE.to_string());
     info!("🚀 Launching MeridianRunner ({target_bundle}) on device {udid} (device_id: {device_id})...");
 
+    // 0. Ensure the Developer Disk Image is mounted. CoreDevice only advertises
+    //    its app-launch service while the DDI is mounted; a reboot unmounts it,
+    //    which otherwise surfaces as "AppService not advertised on RSD".
+    if let Err(e) = crate::device::ddi::ensure_developer_image_mounted(&udid, device_id).await {
+        anyhow::bail!("Developer Disk Image unavailable: {e}");
+    }
+
     // 1. Issue launch command to iOS CoreDevice in pure Rust
     let launch_result = invoke_native_launch(&udid, device_id, &target_bundle).await;
     if let Err(ref e) = launch_result {
