@@ -47,7 +47,7 @@ Each device gets 3 ports: Stream, WDA, Bridge.
 
 **Control port**: 2333 (single, shared by all clients)
 
-**Omnisette**: 6969 (Apple anisette headers for sideloading — needs provider files to function)
+**Omnisette**: 6969 (Apple anisette headers for sideloading — ✅ working, provider files from Apple Music APK at `/usr/local/bin/lib/x86_64/`)
 
 ---
 
@@ -165,7 +165,7 @@ SSH port references updated: 22 → 122
 
 ## Known Issues
 
-1. **Omnisette** — Binary installed at `/usr/local/bin/omnisette-server`, systemd service created but NOT started. Needs Apple anisette provider data files to generate genuine FairPlay headers. Without these files, it panics at startup.
+None. All services operational.
 
 ---
 
@@ -198,4 +198,4 @@ mongodump --uri='mongodb://meridian_app:Rb2Tz%23dfyY81Qm@127.0.0.1:27017/meridia
 
 ---
 
-*Last updated: 2026-09-11 — All phases complete, SSL live*
+*Last updated: 2026-09-11 — All phases complete, SSL live, Omnisette operational*
