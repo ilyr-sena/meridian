@@ -39,11 +39,11 @@ Each device gets 3 ports: Stream, WDA, Bridge.
 | N        | 19200+(N-1) | 18100+(N-1) | 19000+N |
 
 **Pattern:**
-- Stream:  **19200 + device_index** (19200, 19201, 19202, ...)
+- Stream:  **19100 + device_index** (internal, localhost) → **19200 + device_index** (SSL via stunnel)
 - WDA:     **18100 + device_index** (18100, 18101, 18102, ...)
 - Bridge:  **19001 + device_index** (19001, 19002, 19003, ...)
 
-**Port range needed**: 18100–18199, 19001–19099, 19200–19299 (supports up to 100 devices)
+**Port range needed**: 18100–18199, 19001–19099, 19100–19199, 19200–19299 (supports up to 100 devices)
 
 **Control port**: 2333 (single, shared by all clients)
 
@@ -62,7 +62,8 @@ Each device gets 3 ports: Stream, WDA, Bridge.
 | 2333 | TCP      | Rathole control (single, shared) |
 | 18100-18199 | TCP | Rathole WDA (per device) |
 | 19001-19099 | TCP | Rathole Bridge (per device) |
-| 19200-19299 | TCP | Rathole Stream (per device) |
+| 19100-19199 | TCP | Rathole Stream internal (per device, localhost only) |
+| 19200-19299 | TCP | Rathole Stream SSL (per device, stunnel → 19100+N) |
 
 **Note**: Port 3000 is NOT exposed. Nginx proxies 443→localhost:3000 internally.
 
