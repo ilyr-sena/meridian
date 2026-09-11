@@ -56,10 +56,24 @@ pub async fn ensure_developer_image_mounted(udid: &str, device_id: u32) -> anyho
         .unwrap_or(0);
 
     if major >= 17 {
+        // Developer Mode must be enabled before a personalized DDI can mount.
+        if let Ok(developer_mode) = developer_mode_enabled(&provider).await {
+            if !developer_mode {
+                anyhow::bail!(
+                    "Developer Mode is not enabled on this device.\n\
+                     Open Settings -> Privacy & Security -> Developer Mode, enable it, and reboot."
+                );
+            }
+        }
         mount_personalized(&provider).await
     } else {
         mount_classic(&provider, &version).await
     }
+}
+
+async fn developer_mode_enabled(provider: &UsbmuxdProvider) -> anyhow::Result<bool> {
+    let mut mounter = ImageMounter::connect(provider).await?;
+    Ok(mounter.query_developer_mode_status().await?)
 }
 
 fn provider(udid: &str, device_id: u32) -> UsbmuxdProvider {
