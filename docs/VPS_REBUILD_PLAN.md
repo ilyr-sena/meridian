@@ -102,8 +102,7 @@ Each device gets 3 ports: Stream, WDA, Bridge.
 ### Phase 4: SSL + Nginx ✅
 - [x] 4.1 Nginx configured: 80→443 redirect, 443→Next.js:3000
 - [x] 4.2 Self-signed cert active (temporary)
-- [ ] 4.3 SSL cert — **PENDING** (Let's Encrypt transient DNS issue with GoDaddy nameservers)
-  - Retry: `sudo certbot --nginx -d meridianhub.cc`
+- [x] 4.3 SSL cert — Let's Encrypt, valid until 2026-12-10, auto-renewal configured
 
 ### Phase 5: Web App Deploy ✅
 - [x] 5.1 Clone repo from github.com/ilyr-sena/meridian.git
@@ -166,9 +165,7 @@ SSH port references updated: 22 → 122
 
 ## Known Issues
 
-1. **SSL cert** — Let's Encrypt fails with "DNS problem: networking error looking up A for meridianhub.cc" during secondary validation. Transient issue with GoDaddy nameservers. Retry later.
-
-2. **Omnisette** — Binary installed at `/usr/local/bin/omnisette-server`, systemd service created but NOT started. Needs Apple anisette provider data files to generate genuine FairPlay headers. Without these files, it panics at startup.
+1. **Omnisette** — Binary installed at `/usr/local/bin/omnisette-server`, systemd service created but NOT started. Needs Apple anisette provider data files to generate genuine FairPlay headers. Without these files, it panics at startup.
 
 ---
 
@@ -201,4 +198,4 @@ mongodump --uri='mongodb://meridian_app:Rb2Tz%23dfyY81Qm@127.0.0.1:27017/meridia
 
 ---
 
-*Last updated: 2026-09-11 — All phases complete, SSL pending*
+*Last updated: 2026-09-11 — All phases complete, SSL live*
