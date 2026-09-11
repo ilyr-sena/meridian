@@ -4,5 +4,6 @@ pub mod lockdown;
 pub mod monitor;
 pub mod launcher;
 pub mod actions;
+pub mod ddi;
 
 
