@@ -8,18 +8,18 @@ This document provides a comprehensive, ground-truth technical briefing on the M
 
 ### 1.1 VPS Infrastructure (Cloud Server)
 - **Domain**: `https://meridianhub.cc`
-- **Public IP**: `100.51.75.20` (AWS Lightsail, Debian 12 `bookworm`, kernel `6.12.95+deb13-cloud-amd64`)
+- **Public IP**: `98.84.189.148` (AWS Lightsail, Debian 12 `bookworm`, kernel `6.12.95+deb13-cloud-amd64`)
 - **Tailscale IP**: `100.127.117.36` (Node name: `vps-meridian`)
 - **Hardware Specs**: **1 GB RAM, 2 vCPUs, 40 GB NVMe SSD**
 - **SSH Access**:
-  - Command: `ssh -i /home/sooku/Downloads/LightsailDefaultKey-us-east-1.pem admin@100.51.75.20`
-  - Key path on host: `/home/sooku/Downloads/LightsailDefaultKey-us-east-1.pem` (Permissions `0600`)
+  - Command: `ssh -i /home/sooku/Downloads/001-KEY.pem -p 122 admin@98.84.189.148`
+  - Key path on host: `/home/sooku/Downloads/001-KEY.pem` (Permissions `0600`)
   - Sudo on VPS: Passwordless for `admin` (`sudo <cmd>`)
 - **Web App Location**: `/home/admin/meridian/apps/web`
   - PM2 process: `meridian` (Process ID `0`, runs `npm run start` on port 3000)
   - PM2 commands: `pm2 status`, `pm2 restart meridian`, `pm2 logs meridian`
 - **MongoDB**: Local instance on port `27017`
-  - Connection string: `mongodb://127.0.0.1:27017/meridian` (or remote from mesh `mongodb://100.51.75.20:27017/meridian`)
+  - Connection string: `mongodb://127.0.0.1:27017/meridian` (or remote from mesh `mongodb://98.84.189.148:27017/meridian`)
   - Collections: `devices`, `sessions`, `users`, `teams`, `roles`, `permissions`
 - **Omnisette Server**: Port `6969` (Docker/service, generates Apple anisette headers)
 - **Nginx Configs**:
@@ -213,7 +213,7 @@ The original roadmap steps have been re-evaluated:
 ### Quick Reference
 ```bash
 # SSH into VPS
-ssh -i /home/sooku/Downloads/LightsailDefaultKey-us-east-1.pem admin@100.51.75.20
+ssh -i /home/sooku/Downloads/001-KEY.pem -p 122 admin@98.84.189.148
 
 # Check memory
 free -m
@@ -244,12 +244,12 @@ sudo tailscale ping 100.93.183.86
 
 ### Current (Tailscale DERP)
 ```
-Host PC (192.168.0.196) → Tenda Router (NAT) → ISP → Tailscale DERP Relay → VPS (100.51.75.20) → Browser
+Host PC (192.168.0.196) → Tenda Router (NAT) → ISP → Tailscale DERP Relay → VPS (98.84.189.148) → Browser
 ```
 
 ### Target (rathole Direct TCP)
 ```
-Host PC (192.168.0.196) → Tenda Router (NAT) → ISP → VPS (100.51.75.20) → Browser
+Host PC (192.168.0.196) → Tenda Router (NAT) → ISP → VPS (98.84.189.148) → Browser
                            (outbound TCP, no NAT traversal needed)
 ```
 

@@ -42,7 +42,7 @@ where
                 Space::new().width(Length::Fill),
                 column![
                     text("VPS Endpoint").font(FONT_REGULAR).size(12).color(TEXT_SECONDARY),
-                    text("100.51.75.20:2333").font(FONT_MONO).size(14).color(TEXT_PRIMARY),
+                    text("98.84.189.148:2333").font(FONT_MONO).size(14).color(TEXT_PRIMARY),
                 ],
                 Space::new().width(Length::Fill),
                 column![

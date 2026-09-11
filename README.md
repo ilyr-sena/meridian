@@ -44,7 +44,7 @@ Built for **iOS 17 through iOS 27**, Meridian eliminates third-party dependencie
                                           ▼  (Private & Encrypted)
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                              SIDE 2: THE SERVER                             │
-│                    (Cloud VPS: 100.51.75.20 / meridianhub.cc)               │
+│                    (Cloud VPS: 98.84.189.148 / meridianhub.cc)               │
 │                                                                             │
 │  ┌────────────────────────┐  ┌───────────────────────┐  ┌────────────────┐  │
 │  │ Tailscale Daemon       │  │ MongoDB (:27017)      │  │ Omnisette      │  │

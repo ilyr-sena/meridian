@@ -72,7 +72,7 @@ location ~ ^/dev/(100\.\d+\.\d+\.\d+)/(\d+)(?:/(.*))?$ {
 # Dedicated SSL reverse proxy for Port 9200 (WebCodecs Secure Context)
 server {
     listen 9200 ssl;
-    server_name www.meridianhub.cc meridianhub.cc 100.51.75.20 "";
+    server_name www.meridianhub.cc meridianhub.cc 98.84.189.148 "";
 
     ssl_certificate /etc/letsencrypt/live/meridianhub.cc/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/meridianhub.cc/privkey.pem;

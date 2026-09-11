@@ -11,8 +11,8 @@ use tracing::{debug, error, info, warn};
 
 use crate::core::vault::Vault;
 
-const VPS_ADDR: &str = "100.51.75.20:2333";
-const VPS_HOST: &str = "100.51.75.20";
+const VPS_ADDR: &str = "98.84.189.148:2333";
+const VPS_HOST: &str = "98.84.189.148";
 
 #[derive(Debug, Clone)]
 pub struct TunnelStatus {

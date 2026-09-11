@@ -44,7 +44,7 @@ Meridian is an ultra-low-latency physical iPhone orchestration and remote contro
                                           ▼  (Private & Encrypted)
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                              SIDE 2: THE SERVER                             │
-│                  (Cloud VPS: 100.51.75.20 / meridianhub.cc)                 │
+│                  (Cloud VPS: 98.84.189.148 / meridianhub.cc)                 │
 │                                                                             │
 │  ┌────────────────────────┐  ┌───────────────────────┐  ┌────────────────┐  │
 │  │ Tailscale Daemon       │  │ MongoDB (:27017)      │  │ Omnisette      │  │
@@ -101,7 +101,7 @@ Meridian is an ultra-low-latency physical iPhone orchestration and remote contro
   - `DataRateLimits` caps burst data rate to 1.5× average to prevent network bufferbloat.
   - WebSocket (`/stream.ws`) dispatches fMP4 fragments (`moof` + `mdat`) to connected viewers.
 
-### 3.3 Server & Cloud VPS (`meridianhub.cc` / `100.51.75.20`)
+### 3.3 Server & Cloud VPS (`meridianhub.cc` / `98.84.189.148`)
 - **Hardware Specs**: 1 GB RAM, 2 vCPUs, 40 GB NVMe SSD (AWS Lightsail Debian 12).
 - **MongoDB (:27017)**: `devices` and `sessions` collections. Change Streams broadcast database mutations in real time via SSE (`/api/events`).
 - **Next.js 16 Web App (:3000)**: Managed by PM2 (`meridian`). Consumes SSE events to reflect device availability and session leases instantly.
