@@ -14,6 +14,13 @@ pub const BASE_STREAM_PORT: u16 = 9200;
 pub const BASE_BRIDGE_PORT: u16 = 9001;
 pub const MAX_SLOTS: u16 = 32;
 
+// Published (rathole / VPS-facing) port layout per slot. These are the ports the
+// remote web client reaches through the VPS nginx reverse proxy. They share the
+// same slot index as the host-local ports above but live on the VPS.
+pub const RATHOLE_BASE_WDA_PORT: u16 = 18100;
+pub const RATHOLE_BASE_BRIDGE_PORT: u16 = 19001;
+pub const RATHOLE_BASE_STREAM_PORT: u16 = 19100;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DevicePorts {
     pub slot: u16,
@@ -29,6 +36,25 @@ impl DevicePorts {
             wda: BASE_WDA_PORT + slot,
             stream: BASE_STREAM_PORT + slot,
             bridge: BASE_BRIDGE_PORT + slot,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RatholePorts {
+    pub slot: u16,
+    pub wda: u16,
+    pub bridge: u16,
+    pub stream: u16,
+}
+
+impl RatholePorts {
+    pub fn for_slot(slot: u16) -> Self {
+        Self {
+            slot,
+            wda: RATHOLE_BASE_WDA_PORT + slot,
+            bridge: RATHOLE_BASE_BRIDGE_PORT + slot,
+            stream: RATHOLE_BASE_STREAM_PORT + slot,
         }
     }
 }
