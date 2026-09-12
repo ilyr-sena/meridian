@@ -1,0 +1,501 @@
+# Meridian rathole server (VPS side).
+#
+# Control channel: 0.0.0.0:2333  (hub-rust clients connect here)
+# Data services bind on 127.0.0.1 (loopback) — nginx reverse-proxies them via
+# /dev/<port>/... on 443, so they never need to be exposed to the internet.
+#
+# Slot -> ports (must match hub-rust src/core/slots.rs):
+#   WDA    : 18100 + slot
+#   Bridge : 19001 + slot
+#   Stream : 19100 + slot
+
+[server]
+bind_addr = "0.0.0.0:2333"
+
+[server.transport]
+type = "tcp"
+
+[server.transport.tcp]
+nodelay = true
+keepalive_secs = 10
+keepalive_interval = 3
+
+[server.services.wda-0]
+type = "tcp"
+token = "meridian-wda-0"
+bind_addr = "127.0.0.1:18100"
+
+[server.services.bridge-0]
+type = "tcp"
+token = "meridian-bridge-0"
+bind_addr = "127.0.0.1:19001"
+
+[server.services.stream-0]
+type = "tcp"
+token = "meridian-stream-0"
+bind_addr = "127.0.0.1:19100"
+
+[server.services.wda-1]
+type = "tcp"
+token = "meridian-wda-1"
+bind_addr = "127.0.0.1:18101"
+
+[server.services.bridge-1]
+type = "tcp"
+token = "meridian-bridge-1"
+bind_addr = "127.0.0.1:19002"
+
+[server.services.stream-1]
+type = "tcp"
+token = "meridian-stream-1"
+bind_addr = "127.0.0.1:19101"
+
+[server.services.wda-2]
+type = "tcp"
+token = "meridian-wda-2"
+bind_addr = "127.0.0.1:18102"
+
+[server.services.bridge-2]
+type = "tcp"
+token = "meridian-bridge-2"
+bind_addr = "127.0.0.1:19003"
+
+[server.services.stream-2]
+type = "tcp"
+token = "meridian-stream-2"
+bind_addr = "127.0.0.1:19102"
+
+[server.services.wda-3]
+type = "tcp"
+token = "meridian-wda-3"
+bind_addr = "127.0.0.1:18103"
+
+[server.services.bridge-3]
+type = "tcp"
+token = "meridian-bridge-3"
+bind_addr = "127.0.0.1:19004"
+
+[server.services.stream-3]
+type = "tcp"
+token = "meridian-stream-3"
+bind_addr = "127.0.0.1:19103"
+
+[server.services.wda-4]
+type = "tcp"
+token = "meridian-wda-4"
+bind_addr = "127.0.0.1:18104"
+
+[server.services.bridge-4]
+type = "tcp"
+token = "meridian-bridge-4"
+bind_addr = "127.0.0.1:19005"
+
+[server.services.stream-4]
+type = "tcp"
+token = "meridian-stream-4"
+bind_addr = "127.0.0.1:19104"
+
+[server.services.wda-5]
+type = "tcp"
+token = "meridian-wda-5"
+bind_addr = "127.0.0.1:18105"
+
+[server.services.bridge-5]
+type = "tcp"
+token = "meridian-bridge-5"
+bind_addr = "127.0.0.1:19006"
+
+[server.services.stream-5]
+type = "tcp"
+token = "meridian-stream-5"
+bind_addr = "127.0.0.1:19105"
+
+[server.services.wda-6]
+type = "tcp"
+token = "meridian-wda-6"
+bind_addr = "127.0.0.1:18106"
+
+[server.services.bridge-6]
+type = "tcp"
+token = "meridian-bridge-6"
+bind_addr = "127.0.0.1:19007"
+
+[server.services.stream-6]
+type = "tcp"
+token = "meridian-stream-6"
+bind_addr = "127.0.0.1:19106"
+
+[server.services.wda-7]
+type = "tcp"
+token = "meridian-wda-7"
+bind_addr = "127.0.0.1:18107"
+
+[server.services.bridge-7]
+type = "tcp"
+token = "meridian-bridge-7"
+bind_addr = "127.0.0.1:19008"
+
+[server.services.stream-7]
+type = "tcp"
+token = "meridian-stream-7"
+bind_addr = "127.0.0.1:19107"
+
+[server.services.wda-8]
+type = "tcp"
+token = "meridian-wda-8"
+bind_addr = "127.0.0.1:18108"
+
+[server.services.bridge-8]
+type = "tcp"
+token = "meridian-bridge-8"
+bind_addr = "127.0.0.1:19009"
+
+[server.services.stream-8]
+type = "tcp"
+token = "meridian-stream-8"
+bind_addr = "127.0.0.1:19108"
+
+[server.services.wda-9]
+type = "tcp"
+token = "meridian-wda-9"
+bind_addr = "127.0.0.1:18109"
+
+[server.services.bridge-9]
+type = "tcp"
+token = "meridian-bridge-9"
+bind_addr = "127.0.0.1:19010"
+
+[server.services.stream-9]
+type = "tcp"
+token = "meridian-stream-9"
+bind_addr = "127.0.0.1:19109"
+
+[server.services.wda-10]
+type = "tcp"
+token = "meridian-wda-10"
+bind_addr = "127.0.0.1:18110"
+
+[server.services.bridge-10]
+type = "tcp"
+token = "meridian-bridge-10"
+bind_addr = "127.0.0.1:19011"
+
+[server.services.stream-10]
+type = "tcp"
+token = "meridian-stream-10"
+bind_addr = "127.0.0.1:19110"
+
+[server.services.wda-11]
+type = "tcp"
+token = "meridian-wda-11"
+bind_addr = "127.0.0.1:18111"
+
+[server.services.bridge-11]
+type = "tcp"
+token = "meridian-bridge-11"
+bind_addr = "127.0.0.1:19012"
+
+[server.services.stream-11]
+type = "tcp"
+token = "meridian-stream-11"
+bind_addr = "127.0.0.1:19111"
+
+[server.services.wda-12]
+type = "tcp"
+token = "meridian-wda-12"
+bind_addr = "127.0.0.1:18112"
+
+[server.services.bridge-12]
+type = "tcp"
+token = "meridian-bridge-12"
+bind_addr = "127.0.0.1:19013"
+
+[server.services.stream-12]
+type = "tcp"
+token = "meridian-stream-12"
+bind_addr = "127.0.0.1:19112"
+
+[server.services.wda-13]
+type = "tcp"
+token = "meridian-wda-13"
+bind_addr = "127.0.0.1:18113"
+
+[server.services.bridge-13]
+type = "tcp"
+token = "meridian-bridge-13"
+bind_addr = "127.0.0.1:19014"
+
+[server.services.stream-13]
+type = "tcp"
+token = "meridian-stream-13"
+bind_addr = "127.0.0.1:19113"
+
+[server.services.wda-14]
+type = "tcp"
+token = "meridian-wda-14"
+bind_addr = "127.0.0.1:18114"
+
+[server.services.bridge-14]
+type = "tcp"
+token = "meridian-bridge-14"
+bind_addr = "127.0.0.1:19015"
+
+[server.services.stream-14]
+type = "tcp"
+token = "meridian-stream-14"
+bind_addr = "127.0.0.1:19114"
+
+[server.services.wda-15]
+type = "tcp"
+token = "meridian-wda-15"
+bind_addr = "127.0.0.1:18115"
+
+[server.services.bridge-15]
+type = "tcp"
+token = "meridian-bridge-15"
+bind_addr = "127.0.0.1:19016"
+
+[server.services.stream-15]
+type = "tcp"
+token = "meridian-stream-15"
+bind_addr = "127.0.0.1:19115"
+
+[server.services.wda-16]
+type = "tcp"
+token = "meridian-wda-16"
+bind_addr = "127.0.0.1:18116"
+
+[server.services.bridge-16]
+type = "tcp"
+token = "meridian-bridge-16"
+bind_addr = "127.0.0.1:19017"
+
+[server.services.stream-16]
+type = "tcp"
+token = "meridian-stream-16"
+bind_addr = "127.0.0.1:19116"
+
+[server.services.wda-17]
+type = "tcp"
+token = "meridian-wda-17"
+bind_addr = "127.0.0.1:18117"
+
+[server.services.bridge-17]
+type = "tcp"
+token = "meridian-bridge-17"
+bind_addr = "127.0.0.1:19018"
+
+[server.services.stream-17]
+type = "tcp"
+token = "meridian-stream-17"
+bind_addr = "127.0.0.1:19117"
+
+[server.services.wda-18]
+type = "tcp"
+token = "meridian-wda-18"
+bind_addr = "127.0.0.1:18118"
+
+[server.services.bridge-18]
+type = "tcp"
+token = "meridian-bridge-18"
+bind_addr = "127.0.0.1:19019"
+
+[server.services.stream-18]
+type = "tcp"
+token = "meridian-stream-18"
+bind_addr = "127.0.0.1:19118"
+
+[server.services.wda-19]
+type = "tcp"
+token = "meridian-wda-19"
+bind_addr = "127.0.0.1:18119"
+
+[server.services.bridge-19]
+type = "tcp"
+token = "meridian-bridge-19"
+bind_addr = "127.0.0.1:19020"
+
+[server.services.stream-19]
+type = "tcp"
+token = "meridian-stream-19"
+bind_addr = "127.0.0.1:19119"
+
+[server.services.wda-20]
+type = "tcp"
+token = "meridian-wda-20"
+bind_addr = "127.0.0.1:18120"
+
+[server.services.bridge-20]
+type = "tcp"
+token = "meridian-bridge-20"
+bind_addr = "127.0.0.1:19021"
+
+[server.services.stream-20]
+type = "tcp"
+token = "meridian-stream-20"
+bind_addr = "127.0.0.1:19120"
+
+[server.services.wda-21]
+type = "tcp"
+token = "meridian-wda-21"
+bind_addr = "127.0.0.1:18121"
+
+[server.services.bridge-21]
+type = "tcp"
+token = "meridian-bridge-21"
+bind_addr = "127.0.0.1:19022"
+
+[server.services.stream-21]
+type = "tcp"
+token = "meridian-stream-21"
+bind_addr = "127.0.0.1:19121"
+
+[server.services.wda-22]
+type = "tcp"
+token = "meridian-wda-22"
+bind_addr = "127.0.0.1:18122"
+
+[server.services.bridge-22]
+type = "tcp"
+token = "meridian-bridge-22"
+bind_addr = "127.0.0.1:19023"
+
+[server.services.stream-22]
+type = "tcp"
+token = "meridian-stream-22"
+bind_addr = "127.0.0.1:19122"
+
+[server.services.wda-23]
+type = "tcp"
+token = "meridian-wda-23"
+bind_addr = "127.0.0.1:18123"
+
+[server.services.bridge-23]
+type = "tcp"
+token = "meridian-bridge-23"
+bind_addr = "127.0.0.1:19024"
+
+[server.services.stream-23]
+type = "tcp"
+token = "meridian-stream-23"
+bind_addr = "127.0.0.1:19123"
+
+[server.services.wda-24]
+type = "tcp"
+token = "meridian-wda-24"
+bind_addr = "127.0.0.1:18124"
+
+[server.services.bridge-24]
+type = "tcp"
+token = "meridian-bridge-24"
+bind_addr = "127.0.0.1:19025"
+
+[server.services.stream-24]
+type = "tcp"
+token = "meridian-stream-24"
+bind_addr = "127.0.0.1:19124"
+
+[server.services.wda-25]
+type = "tcp"
+token = "meridian-wda-25"
+bind_addr = "127.0.0.1:18125"
+
+[server.services.bridge-25]
+type = "tcp"
+token = "meridian-bridge-25"
+bind_addr = "127.0.0.1:19026"
+
+[server.services.stream-25]
+type = "tcp"
+token = "meridian-stream-25"
+bind_addr = "127.0.0.1:19125"
+
+[server.services.wda-26]
+type = "tcp"
+token = "meridian-wda-26"
+bind_addr = "127.0.0.1:18126"
+
+[server.services.bridge-26]
+type = "tcp"
+token = "meridian-bridge-26"
+bind_addr = "127.0.0.1:19027"
+
+[server.services.stream-26]
+type = "tcp"
+token = "meridian-stream-26"
+bind_addr = "127.0.0.1:19126"
+
+[server.services.wda-27]
+type = "tcp"
+token = "meridian-wda-27"
+bind_addr = "127.0.0.1:18127"
+
+[server.services.bridge-27]
+type = "tcp"
+token = "meridian-bridge-27"
+bind_addr = "127.0.0.1:19028"
+
+[server.services.stream-27]
+type = "tcp"
+token = "meridian-stream-27"
+bind_addr = "127.0.0.1:19127"
+
+[server.services.wda-28]
+type = "tcp"
+token = "meridian-wda-28"
+bind_addr = "127.0.0.1:18128"
+
+[server.services.bridge-28]
+type = "tcp"
+token = "meridian-bridge-28"
+bind_addr = "127.0.0.1:19029"
+
+[server.services.stream-28]
+type = "tcp"
+token = "meridian-stream-28"
+bind_addr = "127.0.0.1:19128"
+
+[server.services.wda-29]
+type = "tcp"
+token = "meridian-wda-29"
+bind_addr = "127.0.0.1:18129"
+
+[server.services.bridge-29]
+type = "tcp"
+token = "meridian-bridge-29"
+bind_addr = "127.0.0.1:19030"
+
+[server.services.stream-29]
+type = "tcp"
+token = "meridian-stream-29"
+bind_addr = "127.0.0.1:19129"
+
+[server.services.wda-30]
+type = "tcp"
+token = "meridian-wda-30"
+bind_addr = "127.0.0.1:18130"
+
+[server.services.bridge-30]
+type = "tcp"
+token = "meridian-bridge-30"
+bind_addr = "127.0.0.1:19031"
+
+[server.services.stream-30]
+type = "tcp"
+token = "meridian-stream-30"
+bind_addr = "127.0.0.1:19130"
+
+[server.services.wda-31]
+type = "tcp"
+token = "meridian-wda-31"
+bind_addr = "127.0.0.1:18131"
+
+[server.services.bridge-31]
+type = "tcp"
+token = "meridian-bridge-31"
+bind_addr = "127.0.0.1:19032"
+
+[server.services.stream-31]
+type = "tcp"
+token = "meridian-stream-31"
+bind_addr = "127.0.0.1:19131"
