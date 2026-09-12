@@ -1,104 +1,91 @@
 # Meridian Port Matrix & Dynamic Allocation Guide
 
-## 1. Production Port Standard
+There are **two** port planes, both derived from the same per-device **slot**:
 
-In the unified Meridian architecture, the following ports are reserved and managed:
-
-| Function | Base Port | Range (32 Slots) | Protocol | Handled By |
-| :--- | :--- | :--- | :--- | :--- |
-| **WDA Automation** | `8100` | `8100 - 8131` | HTTP / REST | WebDriverAgent runner on iPhone |
-| **Control Bridge** | `9001` | `9001 - 9032` | HTTP & WebSocket (`/ws`) | `meridian-hub` (pure Rust bridge) |
-| **Screen Stream** | `9200` | `9200 - 9231` | HTTP, HTTPS & WebSocket (`/stream.ws`) | `MeridianRunner` H.264 engine |
-
-> **Note**: Legacy port `49151` (`tunneld`) has been completely removed. CoreDevice DVT communication runs natively in pure Rust via userspace `jktcp` TCP over usbmuxd.
+1. **Host-local ports** — where the hub actually binds on the host PC (USB side). Never exposed to the internet.
+2. **Published (rathole) ports** — where the traffic lands on the VPS and is served to the browser through nginx.
 
 ---
 
-## 2. Dynamic Slot Allocation (strictly USB Connection Order)
+## 1. Host-Local Ports (host PC, internal)
 
-Slots are assigned dynamically by `SlotManager` in thread-safe order of physical USB connection:
-
-| Slot # | Device Order | WDA Port | Bridge Port | Stream Port |
-| :---: | :--- | :---: | :---: | :---: |
-| **Slot 0** | 1st connected iPhone | `8100` | `9001` | `9200` |
-| **Slot 1** | 2nd connected iPhone | `8101` | `9002` | `9201` |
-| **Slot 2** | 3rd connected iPhone | `8102` | `9003` | `9202` |
-| **Slot N** | (N+1)th connected iPhone | `8100 + N` | `9001 + N` | `9200 + N` |
-
-When a device is detached or its session is stopped:
-1. Hub terminates local tunnels on WDA and Stream ports.
-2. Hub stops the bridge server.
-3. Hub sends an immediate heartbeat setting `host_ports: null` in MongoDB.
-4. The slot is released and made available for subsequent connections without port collisions.
+| Function | Base Port | Formula | Handled By |
+| :--- | :--- | :--- | :--- |
+| WDA Automation | `8100` | `8100 + slot` | WebDriverAgent runner on iPhone |
+| Control Bridge | `9001` | `9001 + slot` | `meridian-hub` (pure Rust bridge) |
+| Screen Stream | `9200` | `9200 + slot` | MeridianRunner H.264 engine |
 
 ---
 
-## 3. Host Firewall Configuration
+## 2. Published Rathole Ports (VPS, browser-facing)
 
-### Windows
-```cmd
-netsh advfirewall firewall add rule name="Meridian-WDA" dir=in action=allow protocol=TCP localport=8100-8131
-netsh advfirewall firewall add rule name="Meridian-Bridge" dir=in action=allow protocol=TCP localport=9001-9032
-netsh advfirewall firewall add rule name="Meridian-Stream" dir=in action=allow protocol=TCP localport=9200-9231
-```
+Reached by the browser only through nginx: `https://meridianhub.cc/dev/<port>/<path>`
+(nginx `location ~ ^/dev/(\d+)/(.*)` proxies to `http://127.0.0.1:<port>/<path>`).
 
-### Linux (ufw / iptables)
-```bash
-sudo ufw allow 8100:8131/tcp
-sudo ufw allow 9001:9032/tcp
-sudo ufw allow 9200:9231/tcp
-```
+| Function | Base Port | Formula | Rathole Server Bind |
+| :--- | :--- | :--- | :--- |
+| WDA Automation | `18100` | `18100 + slot` | `127.0.0.1:18100+slot` |
+| Control Bridge | `19001` | `19001 + slot` | `127.0.0.1:19001+slot` |
+| Screen Stream | `19100` | `19100 + slot` | `127.0.0.1:19100+slot` |
+
+Rathole control channel: `98.84.189.148:2333`.
 
 ---
 
-## 4. VPS Nginx Dynamic Routing Rules
+## 3. Dynamic Slot Allocation (strictly USB connection order)
 
-On the VPS (`meridianhub.cc`), Nginx dynamically routes requests to the specific Tailscale IP of the host machine running the device session:
+Slots are assigned dynamically by `SlotManager`, in thread-safe order of physical
+USB connection. Slot `N` maps to the port triple above (both planes share `N`).
 
-```nginx
-# Dynamic multi-node routing: /dev/<tailscale_ip>/<port>/<path>
-location ~ ^/dev/(100\.\d+\.\d+\.\d+)/(\d+)(?:/(.*))?$ {
-    proxy_pass http://$1:$2/$3$is_args$args;
-    proxy_buffering off;
-    proxy_http_version 1.1;
-    proxy_set_header Upgrade $http_upgrade;
-    proxy_set_header Connection "upgrade";
-    proxy_set_header Host $host;
-    proxy_read_timeout 300s;
-    proxy_send_timeout 300s;
-    proxy_connect_timeout 10s;
-}
+| Slot # | USB Order | Host-local | Published (rathole) |
+| :---: | :--- | :--- | :--- |
+| 0 | 1st iPhone | 8100/9001/9200 | 18100/19001/19100 |
+| 1 | 2nd iPhone | 8101/9002/9201 | 18101/19002/19101 |
+| N | (N+1)th | 8100+N / 9001+N / 9200+N | 18100+N / 19001+N / 19100+N |
 
-# Dedicated SSL reverse proxy for Port 9200 (WebCodecs Secure Context)
-server {
-    listen 9200 ssl;
-    server_name www.meridianhub.cc meridianhub.cc 98.84.189.148 "";
+When a device detaches:
+1. The hub stops its WDA/stream tunnels and bridge server.
+2. The hub sends a heartbeat with `host_ports: null` (DB updated in real-time).
+3. The slot is released for the next USB-attached device.
 
-    ssl_certificate /etc/letsencrypt/live/meridianhub.cc/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/meridianhub.cc/privkey.pem;
-    include /etc/letsencrypt/options-ssl-nginx.conf;
-    ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
+---
 
-    error_page 497 https://meridianhub.cc:9200$request_uri;
+## 4. Components That Must Agree
 
-    location / {
-        proxy_pass http://100.93.183.86:9200;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection "upgrade";
-        proxy_set_header Host $host;
-        proxy_buffering off;
-        proxy_read_timeout 300s;
-        proxy_send_timeout 300s;
-        proxy_connect_timeout 10s;
-    }
+Three places encode the port scheme; keep them in sync:
+
+- `apps/hub-rust/src/core/slots.rs` — `BASE_*` and `RATHOLE_*` constants, `RatholePorts`.
+- `apps/hub-rust/src/remote/mesh.rs` — rathole client service tokens `meridian-{wda|bridge|stream}-{slot}` and local addresses.
+- `infra/rathole-server.toml` — rathole server services with identical tokens, bound to `127.0.0.1` published ports.
+
+---
+
+## 5. Heartbeat Contract
+
+`POST /api/devices/heartbeat` — sent every 6s while a device is online, and once on
+state changes. The `host_ports` value carries the **published rathole ports** (not
+the host-local ports), and always includes `udid` for `udid ↔ ports` correlation:
+
+```json
+{
+  "udid": "00008110-…",
+  "name": "iPhone",
+  "model": "iPhone 13",
+  "version": "iOS 27.0",
+  "host_ports": { "wda": 18100, "bridge": 19001, "stream": 19100 },
+  "status": "online",
+  "session_active": true
 }
 ```
 
-### Public Endpoints Exposed to Browser:
-* **Control WebSocket**: `wss://meridianhub.cc/dev/{tailscale_ip}/9001/ws`
-* **Stream WebSocket**: `wss://meridianhub.cc/dev/{tailscale_ip}/9200/stream.ws`
-* **Direct Stream Page (SSL)**: `https://meridianhub.cc:9200/`
-* **Installed Apps List**: `https://meridianhub.cc/dev/{tailscale_ip}/9001/apps.json`
-* **App Icon PNG**: `https://meridianhub.cc/dev/{tailscale_ip}/9001/icon/{bundle_id}.png`
-* **WDA Automation**: `https://meridianhub.cc/dev/{tailscale_ip}/8100/status`
+The React client keys off `host_ports` (no IP/UUID needed in the URL).
+
+---
+
+## 6. Public Endpoints Exposed to the Browser
+
+- **Stream (H.264 + MJPG)**: `https://meridianhub.cc/dev/19100/stream.ws` / `…/dev/19100/stream?…`
+- **Control WebSocket**: `wss://meridianhub.cc/dev/19001/ws`
+- **Installed Apps**: `https://meridianhub.cc/dev/19001/apps.json`
+- **App Icon**: `https://meridianhub.cc/dev/19001/icon/<bundle_id>.png`
+- **WDA Automation**: `https://meridianhub.cc/dev/18100/status`
