@@ -1,0 +1,246 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Meridian — Local Pad &amp; Action Test</title>
+<style>
+  :root { --bg:#0e0e13; --panel:#16161d; --line:#262633; --fg:#e6e6ef; --dim:#9d9db0; --acc:#4f8eff; --warn:#ffb340; --ok:#4ade80; --bad:#ef4444; }
+  * { box-sizing:border-box; margin:0; padding:0 }
+  body { background:var(--bg); color:var(--fg); font-family:ui-sans-serif,system-ui,sans-serif; height:100vh; display:flex; flex-direction:column; overflow:hidden; }
+  header { display:flex; align-items:center; gap:14px; padding:10px 16px; background:var(--panel); border-bottom:1px solid var(--line); flex-shrink:0; flex-wrap:wrap; }
+  header h1 { font-size:15px; font-weight:600 }
+  .chip { display:inline-flex; align-items:center; gap:6px; font-size:12px; color:var(--dim); background:#0f0f15; border:1px solid var(--line); padding:3px 9px; border-radius:999px; }
+  .chip b { color:var(--fg); font-weight:600 }
+  .dot { width:8px; height:8px; border-radius:50%; background:var(--warn); display:inline-block }
+  .chip.on .dot { background:var(--ok); box-shadow:0 0 6px #4ade8088 }
+  .spacer { flex:1 }
+  button { background:#1e1e28; color:var(--fg); border:1px solid var(--line); border-radius:8px; font:inherit; font-size:13px; padding:7px 12px; cursor:pointer; }
+  button:hover { border-color:var(--acc) }
+  main { position:relative; flex:1; display:flex; align-items:center; justify-content:center; background:#000; min-height:0; }
+  canvas { max-width:100%; max-height:100%; object-fit:contain; }
+  #pad { position:absolute; inset:0; cursor:crosshair; touch-action:none; }
+  #coords { position:absolute; top:10px; left:10px; font:12px ui-monospace,monospace; color:var(--dim); background:rgba(0,0,0,.5); padding:4px 8px; border-radius:6px; pointer-events:none; }
+  #actions { position:absolute; bottom:12px; left:50%; transform:translateX(-50%); display:flex; gap:8px; }
+  #log { position:absolute; top:10px; right:10px; width:300px; max-height:40%; overflow-y:auto; font:11px ui-monospace,monospace; background:rgba(0,0,0,.6); border:1px solid var(--line); border-radius:8px; padding:8px; color:var(--dim); pointer-events:none; }
+  #log .d { color:var(--acc) } #log .m { color:var(--dim) } #log .u { color:var(--ok) } #log .a { color:var(--warn) }
+</style>
+</head>
+<body>
+<header>
+  <h1>Local Pad Test</h1>
+  <span class="chip" id="streamChip"><span class="dot"></span><b id="streamState">stream…</b></span>
+  <span class="chip">fps <b id="statFps">–</b></span>
+  <span class="chip" id="bridgeChip"><span class="dot"></span><b id="bridgeState">bridge…</b></span>
+  <span class="chip">coords <b id="coordReadout">–</b></span>
+  <div class="spacer"></div>
+  <button id="fullscreen">Fullscreen</button>
+</header>
+<main id="stage">
+  <canvas id="c"></canvas>
+  <div id="pad"></div>
+  <div id="coords">fx 0.000 | fy 0.000</div>
+  <div id="log"></div>
+  <div id="actions">
+    <button data-action="home">Home</button>
+    <button data-action="lock">Lock</button>
+    <button data-action="volume-up">Vol +</button>
+    <button data-action="volume-down">Vol −</button>
+    <button data-action="siri">Siri</button>
+    <button data-action="mute">Mute</button>
+  </div>
+</main>
+
+<script>
+(() => {
+  const params = new URLSearchParams(location.search)
+  const streamHost = params.get('sh') ?? 'localhost'
+  const streamPort = params.get('sp') ?? '9200'
+  const bridgeHost = params.get('bh') ?? 'localhost'
+  const bridgePort = params.get('bp') ?? '9001'
+  const STREAM_WS = `ws://${streamHost}:${streamPort}/stream.ws`
+  const BRIDGE_WS = `ws://${bridgeHost}:${bridgePort}/ws`
+
+  const c = document.getElementById('c')
+  const pad = document.getElementById('pad')
+  const coordReadout = document.getElementById('coordReadout')
+  const coordsBox = document.getElementById('coords')
+  const logEl = document.getElementById('log')
+  const statFps = document.getElementById('statFps')
+  const streamChip = document.getElementById('streamChip')
+  const bridgeChip = document.getElementById('bridgeChip')
+  const streamState = document.getElementById('streamState')
+  const bridgeState = document.getElementById('bridgeState')
+
+  // ---------------------------------------------------------------- stream ---
+  let streamWs = null
+  let decoder = null
+  let ctx2d = c.getContext('2d', { alpha:false, desynchronized:true })
+  ctx2d.imageSmoothingEnabled = true
+  let seenKey = false
+  let fpsCount = 0, fpsStamp = performance.now()
+
+  function log(kind, text) {
+    const line = document.createElement('div')
+    line.className = kind
+    line.textContent = `${(+new Date()-t0).toString().padStart(6,' ')}ms  ${text}`
+    logEl.prepend(line)
+    while (logEl.children.length > 60) logEl.removeChild(logEl.lastChild)
+  }
+
+  function sendStreamDraw(frame) {
+    if (c.width !== frame.displayWidth || c.height !== frame.displayHeight) {
+      c.width = frame.displayWidth; c.height = frame.displayHeight
+    }
+    ctx2d.drawImage(frame, 0, 0)
+    frame.close()
+    fpsCount++
+  }
+
+  function initWebCodecs(m) {
+    if (decoder) { try { decoder.close() } catch {}; decoder = null }
+    const raw = Uint8Array.from(atob(m.avcC), ch => ch.charCodeAt(0))
+    let desc = raw
+    if (raw.length > 8 && raw[4]===0x61 && raw[5]===0x76 && raw[6]===0x63 && raw[7]===0x43) desc = raw.subarray(8)
+    const codec = (m.codec || 'avc1.64002a').toLowerCase()
+    decoder = new VideoDecoder({
+      output: sendStreamDraw,
+      error: e => { console.warn('decode error', e); seenKey = false }
+    })
+    try {
+      decoder.configure({ codec, description: desc, hardwareAcceleration:'prefer-hardware', optimizeForLatency:true })
+    } catch (e) {
+      try { decoder.configure({ codec, description: desc, hardwareAcceleration:'prefer-hardware' }) }
+      catch (e2) { decoder.configure({ codec, description: desc }) }
+    }
+    streamState.textContent = codec + ' (webcodecs)'
+    streamChip.classList.add('on')
+  }
+
+  function onStreamBinary(data) {
+    if (data.length < 8) return
+    const tag = String.fromCharCode(data[4]||0, data[5]||0, data[6]||0, data[7]||0)
+    if (tag === 'ftyp') return
+    if (tag === 'moof' && decoder && decoder.state === 'configured') {
+      const view = new DataView(data.buffer, data.byteOffset, data.byteLength)
+      const moofLen = view.getUint32(0)
+      if (moofLen + 8 > data.length) return
+      const nalu = new Uint8Array(data.buffer, data.byteOffset + moofLen + 8, data.byteLength - moofLen - 8)
+      if (nalu.length < 5) return
+      let isKey = false, pos = 0
+      while (pos + 4 < nalu.length) {
+        const len = (nalu[pos]<<24)|(nalu[pos+1]<<16)|(nalu[pos+2]<<8)|nalu[pos+3]
+        const t = nalu[pos+4] & 0x1f
+        if (t === 5 || t === 7) { isKey = true; break }
+        pos += 4 + len
+      }
+      if (!isKey && !seenKey) return
+      seenKey = true
+      try {
+        decoder.decode(new EncodedVideoChunk({ type: isKey?'key':'delta', timestamp: performance.now()*1000, data: nalu }))
+      } catch (e) { console.warn('decode frame error', e); seenKey = false }
+    }
+  }
+
+  function connectStream() {
+    streamWs = new WebSocket(STREAM_WS)
+    streamWs.binaryType = 'arraybuffer'
+    streamWs.onopen = () => { streamState.textContent = 'connected'; streamChip.classList.add('on') }
+    streamWs.onclose = () => { streamState.textContent = 'reconnecting'; streamChip.classList.remove('on'); setTimeout(connectStream, 800) }
+    streamWs.onerror = () => {}
+    streamWs.onmessage = (ev) => {
+      if (typeof ev.data === 'string') {
+        let m; try { m = JSON.parse(ev.data) } catch { return }
+        if (m.codec && m.avcC) initWebCodecs(m)
+      } else {
+        onStreamBinary(new Uint8Array(ev.data))
+      }
+    }
+  }
+
+  setInterval(() => {
+    const now = performance.now(); const dt = (now - fpsStamp)/1000; fpsStamp = now
+    statFps.textContent = Math.round(fpsCount / dt); fpsCount = 0
+  }, 800)
+
+  // ---------------------------------------------------------------- bridge ---
+  let bridgeWs = null
+
+  function sendBridge(msg) {
+    if (bridgeWs && bridgeWs.readyState === WebSocket.OPEN) bridgeWs.send(JSON.stringify(msg))
+    else log('m', `bridge offline, dropped: ${msg.kind}`)
+  }
+
+  function connectBridge() {
+    bridgeWs = new WebSocket(BRIDGE_WS)
+    bridgeWs.onopen = () => { bridgeState.textContent = 'connected'; bridgeChip.classList.add('on') }
+    bridgeWs.onclose = () => { bridgeState.textContent = 'reconnecting'; bridgeChip.classList.remove('on'); setTimeout(connectBridge, 500) }
+    bridgeWs.onerror = () => {}
+  }
+
+  // ------------------------------------------------------------- gesture pad --
+  let down = false
+  let last = { fx: 0, fy: 0 }
+  let t0 = +new Date()
+
+  function frac(e) {
+    const r = pad.getBoundingClientRect()
+    return {
+      fx: Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)),
+      fy: Math.min(1, Math.max(0, (e.clientY - r.top) / r.height)),
+    }
+  }
+
+  pad.addEventListener('pointerdown', (e) => {
+    e.preventDefault(); pad.setPointerCapture(e.pointerId)
+    down = true
+    const p = frac(e); last = p
+    coordReadout.textContent = `bridge ${p.fx.toFixed(3)},${p.fy.toFixed(3)}`
+    sendBridge({ kind:'down', fx:p.fx, fy:p.fy })
+    log('d', `down  fx=${p.fx.toFixed(3)} fy=${p.fy.toFixed(3)}`)
+  })
+  pad.addEventListener('pointermove', (e) => {
+    if (!down) return
+    const p = frac(e); last = p
+    coordReadout.textContent = `bridge ${p.fx.toFixed(3)},${p.fy.toFixed(3)}`
+    sendBridge({ kind:'move', fx:p.fx, fy:p.fy })
+    log('m', `move  fx=${p.fx.toFixed(3)} fy=${p.fy.toFixed(3)}`)
+  })
+  pad.addEventListener('pointerrawupdate', (e) => {
+    if (!down) return
+    const p = frac(e); last = p
+    sendBridge({ kind:'move', fx:p.fx, fy:p.fy })
+  })
+  function finish(e) {
+    if (!down) return
+    down = false
+    sendBridge({ kind:'release', fx:last.fx, fy:last.fy })
+    log('u', `release fx=${last.fx.toFixed(3)} fy=${last.fy.toFixed(3)}`)
+  }
+  pad.addEventListener('pointerup', finish)
+  pad.addEventListener('pointercancel', finish)
+  window.addEventListener('pointerup', finish)
+
+  // --------------------------------------------------------------- actions ---
+  document.querySelectorAll('#actions button').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const name = btn.dataset.action
+      sendBridge({ kind:'action', name })
+      log('a', `action ${name}`)
+    })
+  })
+
+  document.getElementById('fullscreen').onclick = () => {
+    if (document.fullscreenElement) document.exitFullscreen()
+    else document.getElementById('stage').requestFullscreen()
+  }
+
+  // ------------------------------------------------------------------ boot ---
+  connectStream()
+  connectBridge()
+  log('m', `stream ${STREAM_WS}`)
+  log('m', `bridge ${BRIDGE_WS}`)
+})();
+</script>
+</body>
+</html>
