@@ -5,5 +5,6 @@ pub mod monitor;
 pub mod launcher;
 pub mod actions;
 pub mod ddi;
+pub mod touch;
 
 
