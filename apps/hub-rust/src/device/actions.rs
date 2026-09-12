@@ -3,7 +3,8 @@
 //! Provides WebDriverAgent automation (touch, keyboard, session management)
 //! and native 60Hz CoreDevice HID hardware button / digitizer input.
 
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 use tokio::sync::RwLock;
 use tracing::{debug, info};
@@ -270,13 +271,58 @@ impl WdaClient {
 }
 
 // ---------------------------------------------------------------------------
-// Native CoreDevice HID Action Dispatcher
+// Native CoreDevice HID Action Dispatcher (connection-cached)
 // ---------------------------------------------------------------------------
+
+/// An established CoreDevice HID session: the software tunnel handle (kept
+/// alive so the tunnel persists) plus the authenticated Indigo HID client.
+/// Reusing it skips the CoreDevice + RSD + XPC handshakes on every button
+/// press, keeping continuous input actions low-latency.
+struct HidSession {
+    handle: idevice::tcp::handle::AdapterHandle,
+    hid: IndigoHidClient<idevice::tcp::handle::StreamHandle>,
+}
+
+static HID_CACHE: OnceLock<tokio::sync::Mutex<HashMap<String, HidSession>>> = OnceLock::new();
+
+fn hid_cache() -> &'static tokio::sync::Mutex<HashMap<String, HidSession>> {
+    HID_CACHE.get_or_init(|| tokio::sync::Mutex::new(HashMap::new()))
+}
+
+async fn create_hid_session(udid: &str, device_id: u32) -> anyhow::Result<HidSession> {
+    let provider = UsbmuxdProvider {
+        addr: UsbmuxdAddr::default(),
+        tag: 1,
+        udid: udid.to_string(),
+        device_id,
+        label: "meridian-hub".to_string(),
+    };
+
+    let proxy = CoreDeviceProxy::connect(&provider).await?;
+    let rsd_port = proxy.tunnel_info().server_rsd_port;
+    let adapter = proxy.create_software_tunnel()?;
+    let mut handle = adapter.to_async_handle();
+
+    let rsd_stream = handle.connect(rsd_port).await?;
+    let rsd = RsdHandshake::new(rsd_stream).await?;
+    let hid_entry = rsd
+        .services
+        .get("com.apple.coredevice.hid.indigo")
+        .ok_or_else(|| anyhow::anyhow!("Indigo HID service not found on RSD"))?;
+
+    let hid_stream = handle.connect(hid_entry.port).await?;
+    let mut xpc_client = idevice::RemoteXpcClient::new(hid_stream).await?;
+    xpc_client.do_handshake().await?;
+    let hid = IndigoHidClient::new(xpc_client);
+
+    Ok(HidSession { handle, hid })
+}
 
 pub struct CoreDeviceHid;
 
 impl CoreDeviceHid {
-    /// Dispatch a named hardware button action directly via CoreDevice HID.
+    /// Dispatch a named hardware button action directly via CoreDevice HID,
+    /// reusing a cached connection where possible.
     ///
     /// Supported button names:
     /// - "home": UsagePage 0x0C, UsageCode 0x40
@@ -304,36 +350,56 @@ impl CoreDeviceHid {
 
         debug!("Dispatching CoreDevice button action '{}' to {}", action, udid);
 
-        let provider = UsbmuxdProvider {
-            addr: UsbmuxdAddr::default(),
-            tag: 1,
-            udid: udid.clone(),
-            device_id,
-            label: "meridian-hub".to_string(),
+        let cache = hid_cache();
+        let mut map = cache.lock().await;
+
+        let session = match map.get_mut(&udid) {
+            Some(s) => s,
+            None => {
+                let s = create_hid_session(&udid, device_id).await?;
+                map.insert(udid.clone(), s);
+                map.get_mut(&udid)
+                    .ok_or_else(|| anyhow::anyhow!("HID session missing"))?
+            }
         };
 
-        let proxy = CoreDeviceProxy::connect(&provider).await?;
-        let rsd_port = proxy.tunnel_info().server_rsd_port;
-        let adapter = proxy.create_software_tunnel()?;
-        let mut handle = adapter.to_async_handle();
+        match Self::do_button(session, usage_page, usage_code, hold_ms).await {
+            Ok(()) => {
+                info!("✓ CoreDevice button '{}' dispatched successfully to {}", action, udid);
+                Ok(())
+            }
+            Err(e) => {
+                // Cached session went stale (lock/unlock, USB re-enum) — drop and
+                // recreate once, then retry the press.
+                debug!("HID session stale for {udid} ({e}); reconnecting");
+                map.remove(&udid);
+                let s = create_hid_session(&udid, device_id).await?;
+                map.insert(udid.clone(), s);
+                let session = map
+                    .get_mut(&udid)
+                    .ok_or_else(|| anyhow::anyhow!("HID session missing"))?;
+                Self::do_button(session, usage_page, usage_code, hold_ms).await?;
+                info!("✓ CoreDevice button '{}' dispatched successfully to {}", action, udid);
+                Ok(())
+            }
+        }
+    }
 
-        let rsd_stream = handle.connect(rsd_port).await?;
-        let rsd = RsdHandshake::new(rsd_stream).await?;
-        let hid_entry = rsd
-            .services
-            .get("com.apple.coredevice.hid.indigo")
-            .ok_or_else(|| anyhow::anyhow!("Indigo HID service not found on RSD"))?;
-
-        let hid_stream = handle.connect(hid_entry.port).await?;
-        let mut xpc_client = idevice::RemoteXpcClient::new(hid_stream).await?;
-        xpc_client.do_handshake().await?;
-        let mut hid = IndigoHidClient::new(xpc_client);
-
-        hid.send_button(usage_page, usage_code, ButtonState::Down).await?;
+    async fn do_button(
+        session: &mut HidSession,
+        usage_page: u64,
+        usage_code: u64,
+        hold_ms: u64,
+    ) -> anyhow::Result<()> {
+        session
+            .hid
+            .send_button(usage_page, usage_code, ButtonState::Down)
+            .await?;
         tokio::time::sleep(Duration::from_millis(hold_ms)).await;
-        hid.send_button(usage_page, usage_code, ButtonState::Up).await?;
-
-        info!("✓ CoreDevice button '{}' dispatched successfully to {}", action, udid);
+        session
+            .hid
+            .send_button(usage_page, usage_code, ButtonState::Up)
+            .await?;
         Ok(())
     }
 }
