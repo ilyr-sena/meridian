@@ -51,8 +51,10 @@ export const H264StreamPlayer = memo(function H264StreamPlayer({
     fpsStamp: performance.now(),
     latencyMs: 0,
     codecStr: "h264",
+    codec: "avc1.64002a",
     unmounted: false,
     hasSeenKeyFrame: false,
+    fmp4Init: null as Uint8Array | null,
     animFrameId: null as number | null,
   })
 
@@ -181,11 +183,30 @@ export const H264StreamPlayer = memo(function H264StreamPlayer({
       }
     }
 
+    // Switch from WebCodecs to MSE at runtime. Seeds the source buffer with the
+    // fMP4 init segment we retained earlier (the runner only sends it once, when
+    // the client first joins). Idempotent.
+    function fallbackToMse(mime: string) {
+      if (s.decoder) {
+        try {
+          s.decoder.close()
+        } catch {
+          // ignore
+        }
+        s.decoder = null
+      }
+      if (s.fmp4Init) {
+        s.pendingBuffers.unshift(s.fmp4Init)
+        s.fmp4Init = null
+      }
+      initMSE(mime)
+      setRenderMode("mse")
+    }
+
     function initWebCodecs(m: { codec: string; avcC?: string }) {
       const canvas = canvasRef.current
       if (!canvas || !hasWebCodecs) {
-        initMSE(`video/mp4; codecs="${m.codec}"`)
-        setRenderMode("mse")
+        fallbackToMse(`video/mp4; codecs="${m.codec}"`)
         return
       }
 
@@ -200,8 +221,7 @@ export const H264StreamPlayer = memo(function H264StreamPlayer({
 
       const ctx2d = canvas.getContext("2d", { alpha: false, desynchronized: true })
       if (!ctx2d) {
-        initMSE(`video/mp4; codecs="${m.codec}"`)
-        setRenderMode("mse")
+        fallbackToMse(`video/mp4; codecs="${m.codec}"`)
         return
       }
       ctx2d.imageSmoothingEnabled = true
@@ -279,8 +299,8 @@ export const H264StreamPlayer = memo(function H264StreamPlayer({
           pendingFrame = frame
         },
         error: (err: any) => {
-          console.warn("[Meridian] WebCodecs decode warning (will resync on next IDR):", err)
-          s.hasSeenKeyFrame = false
+          console.warn("[Meridian] WebCodecs decode error, falling back to MSE:", err)
+          fallbackToMse(`video/mp4; codecs="${codec}"`)
         },
       })
 
@@ -337,10 +357,10 @@ export const H264StreamPlayer = memo(function H264StreamPlayer({
         s.decoder = decoder
         s.hasSeenKeyFrame = false
         s.codecStr = `${codec} (gpu)`
+        s.codec = codec
         setRenderMode("webcodecs")
       } else {
-        initMSE(`video/mp4; codecs="${codec}"`)
-        setRenderMode("mse")
+        fallbackToMse(`video/mp4; codecs="${codec}"`)
       }
     }
 
@@ -402,11 +422,11 @@ export const H264StreamPlayer = memo(function H264StreamPlayer({
             return
           }
           if (m.codec) {
+            s.codec = String(m.codec).toLowerCase()
             if (hasWebCodecs && m.avcC) {
               initWebCodecs(m)
             } else {
-              initMSE(`video/mp4; codecs="${m.codec}"`)
-              setRenderMode("mse")
+              fallbackToMse(`video/mp4; codecs="${s.codec}"`)
             }
           }
           if (m.t) {
@@ -416,16 +436,27 @@ export const H264StreamPlayer = memo(function H264StreamPlayer({
           const data = new Uint8Array(ev.data)
           s.rxBytes += data.byteLength
 
+          const tag =
+            data.length >= 8
+              ? String.fromCharCode(
+                  data[4] ?? 0,
+                  data[5] ?? 0,
+                  data[6] ?? 0,
+                  data[7] ?? 0
+                )
+              : ""
+
+          // Retain the fMP4 init segment (ftyp+moov) the runner sends once on
+          // join, so a later WebCodecs -> MSE fallback can seed the buffer.
+          if (tag === "ftyp") {
+            s.fmp4Init = data.slice()
+          }
+
           if (s.decoder && s.decoder.state === "configured") {
             if (data.length < 8) return
-            const view = new DataView(data.buffer, data.byteOffset, data.byteLength)
-            const b0 = data[4] ?? 0
-            const b1 = data[5] ?? 0
-            const b2 = data[6] ?? 0
-            const b3 = data[7] ?? 0
-            const tag = String.fromCharCode(b0, b1, b2, b3)
             if (tag === "ftyp") return
             if (tag === "moof") {
+              const view = new DataView(data.buffer, data.byteOffset, data.byteLength)
               const moofLen = view.getUint32(0)
               if (moofLen + 8 > data.length) return
               const naluData = new Uint8Array(
@@ -452,7 +483,7 @@ export const H264StreamPlayer = memo(function H264StreamPlayer({
                 pos += 4 + nalLen
               }
 
-              // WebCodecs specification: drop initial delta chunks until first keyframe arrives
+              // WebCodecs spec: drop initial delta chunks until first keyframe arrives
               if (!isKey && !s.hasSeenKeyFrame) {
                 return
               }
@@ -468,15 +499,15 @@ export const H264StreamPlayer = memo(function H264StreamPlayer({
                   })
                 )
               } catch (e) {
-                console.warn("[Meridian] decode frame error:", e)
-                s.hasSeenKeyFrame = false
+                console.warn("[Meridian] decode frame error, falling back to MSE:", e)
+                fallbackToMse(`video/mp4; codecs="${s.codec}"`)
               }
               return
             }
           }
 
-          // MSE Fallback path — strictly only if WebCodecs is unavailable
-          if (renderMode === "mse" || !hasWebCodecs) {
+          // MSE Fallback path — active whenever the WebCodecs decoder is not in use
+          if (!s.decoder || !hasWebCodecs) {
             s.fpsCount++
             s.pendingBuffers.push(data)
             drainMSE()
