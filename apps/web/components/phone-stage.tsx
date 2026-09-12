@@ -434,19 +434,19 @@ export function PhoneStage({ className }: { className?: string }) {
       }
     }
 
-    // Remote: single secure origin through the VPS nginx reverse proxy. The
-    // published (rathole) ports carried in `host_ports` live in the URL path
-    // under /dev/<port>/... which nginx forwards to the matching local port.
+    // Remote: the stream is served over its own TLS (stunnel) port, while WDA
+    // and the control bridge flow through the VPS nginx reverse proxy as a
+    // single secure origin (path /dev/<port>/... -> loopback rathole service).
     const host =
       typeof window !== "undefined" ? window.location.host : "meridianhub.cc"
     const p = activeDevice?.host_ports || {}
-    const streamPort = p.stream || 19100
+    const streamPort = p.stream || 19200
     const wdaPort = p.wda || 18100
     const bridgePort = p.bridge || 19001
 
     return {
-      streamBase: `https://${host}/dev/${streamPort}`,
-      streamWs: `wss://${host}/dev/${streamPort}/stream.ws`,
+      streamBase: `https://${host}:${streamPort}`,
+      streamWs: `wss://${host}:${streamPort}/stream.ws`,
       wdaBase: `https://${host}/dev/${wdaPort}`,
       controlWs: `wss://${host}/dev/${bridgePort}/ws`,
       controlHttp: `https://${host}/dev/${bridgePort}`,

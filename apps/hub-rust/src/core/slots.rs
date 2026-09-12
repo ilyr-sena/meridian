@@ -15,11 +15,13 @@ pub const BASE_BRIDGE_PORT: u16 = 9001;
 pub const MAX_SLOTS: u16 = 32;
 
 // Published (rathole / VPS-facing) port layout per slot. These are the ports the
-// remote web client reaches through the VPS nginx reverse proxy. They share the
-// same slot index as the host-local ports above but live on the VPS.
+// remote web client reaches, and are what the heartbeat reports. WDA and bridge
+// are plain ports on the VPS loopback served through nginx (`/dev/<port>`);
+// stream is the stunnel TLS port (browser talks `:19200+slot` directly, which
+// stunnel wraps to the rathole-internal `19100+slot`).
 pub const RATHOLE_BASE_WDA_PORT: u16 = 18100;
 pub const RATHOLE_BASE_BRIDGE_PORT: u16 = 19001;
-pub const RATHOLE_BASE_STREAM_PORT: u16 = 19100;
+pub const RATHOLE_BASE_STREAM_PORT: u16 = 19200;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DevicePorts {

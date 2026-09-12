@@ -19,14 +19,16 @@ There are **two** port planes, both derived from the same per-device **slot**:
 
 ## 2. Published Rathole Ports (VPS, browser-facing)
 
-Reached by the browser only through nginx: `https://meridianhub.cc/dev/<port>/<path>`
+WDA and bridge reach the browser only through nginx: `https://meridianhub.cc/dev/<port>/<path>`
 (nginx `location ~ ^/dev/(\d+)/(.*)` proxies to `http://127.0.0.1:<port>/<path>`).
+Stream is the exception: it is served over its own stunnel TLS port and the
+browser talks to `https://meridianhub.cc:<stream_port>/...` directly.
 
-| Function | Base Port | Formula | Rathole Server Bind |
-| :--- | :--- | :--- | :--- |
-| WDA Automation | `18100` | `18100 + slot` | `127.0.0.1:18100+slot` |
-| Control Bridge | `19001` | `19001 + slot` | `127.0.0.1:19001+slot` |
-| Screen Stream | `19100` | `19100 + slot` | `127.0.0.1:19100+slot` |
+| Function | Browser Port | Formula | rathole internal bind | stunnel |
+| :--- | :--- | :--- | :--- | :--- |
+| WDA Automation | `18100` | `18100 + slot` | `127.0.0.1:18100+slot` | — (via nginx) |
+| Control Bridge | `19001` | `19001 + slot` | `127.0.0.1:19001+slot` | — (via nginx) |
+| Screen Stream | `19200` | `19200 + slot` | `127.0.0.1:19100+slot` | `19200+slot → 19100+slot` |
 
 Rathole control channel: `98.84.189.148:2333`.
 
@@ -39,9 +41,9 @@ USB connection. Slot `N` maps to the port triple above (both planes share `N`).
 
 | Slot # | USB Order | Host-local | Published (rathole) |
 | :---: | :--- | :--- | :--- |
-| 0 | 1st iPhone | 8100/9001/9200 | 18100/19001/19100 |
-| 1 | 2nd iPhone | 8101/9002/9201 | 18101/19002/19101 |
-| N | (N+1)th | 8100+N / 9001+N / 9200+N | 18100+N / 19001+N / 19100+N |
+| 0 | 1st iPhone | 8100/9001/9200 | 18100/19001/19200 |
+| 1 | 2nd iPhone | 8101/9002/9201 | 18101/19002/19201 |
+| N | (N+1)th | 8100+N / 9001+N / 9200+N | 18100+N / 19001+N / 19200+N |
 
 When a device detaches:
 1. The hub stops its WDA/stream tunnels and bridge server.
@@ -72,7 +74,7 @@ the host-local ports), and always includes `udid` for `udid ↔ ports` correlati
   "name": "iPhone",
   "model": "iPhone 13",
   "version": "iOS 27.0",
-  "host_ports": { "wda": 18100, "bridge": 19001, "stream": 19100 },
+  "host_ports": { "wda": 18100, "bridge": 19001, "stream": 19200 },
   "status": "online",
   "session_active": true
 }
@@ -84,7 +86,7 @@ The React client keys off `host_ports` (no IP/UUID needed in the URL).
 
 ## 6. Public Endpoints Exposed to the Browser
 
-- **Stream (H.264 + MJPG)**: `https://meridianhub.cc/dev/19100/stream.ws` / `…/dev/19100/stream?…`
+- **Stream (H.264 + MJPG)**: `https://meridianhub.cc:19200/stream.ws` / `…:19200/stream?…` (stunnel TLS)
 - **Control WebSocket**: `wss://meridianhub.cc/dev/19001/ws`
 - **Installed Apps**: `https://meridianhub.cc/dev/19001/apps.json`
 - **App Icon**: `https://meridianhub.cc/dev/19001/icon/<bundle_id>.png`
