@@ -86,15 +86,19 @@ impl TunnelSupervisor {
     pub fn update_slots(&self, mut slots: Vec<u16>) {
         slots.sort_unstable();
         slots.dedup();
-        {
+        let changed = {
             let mut current = self.slots.lock().unwrap();
             if *current == slots {
-                return;
+                false
+            } else {
+                *current = slots.clone();
+                true
             }
-            *current = slots;
+        };
+        if changed {
+            info!("[TUNNEL] Slots changed to {:?} — restarting tunnel", slots);
+            let _ = self.shutdown_tx.send(true);
         }
-        info!("[TUNNEL] Slots changed to {:?} — restarting tunnel", *self.slots.lock().unwrap());
-        let _ = self.shutdown_tx.send(true);
     }
 
     pub async fn stop(&self) {
