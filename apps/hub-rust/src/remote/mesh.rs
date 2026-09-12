@@ -4,11 +4,12 @@
 //! Replaces the previous Tailscale mesh sidecar (Go binary + DERP relay).
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::broadcast;
 use tracing::{debug, error, info, warn};
 
+use crate::core::slots::{BASE_BRIDGE_PORT, BASE_STREAM_PORT, BASE_WDA_PORT};
 use crate::core::vault::Vault;
 
 const VPS_ADDR: &str = "98.84.189.148:2333";
@@ -42,6 +43,7 @@ impl TunnelStatus {
 pub struct TunnelSupervisor {
     status: Arc<tokio::sync::Mutex<TunnelStatus>>,
     should_run: Arc<AtomicBool>,
+    slots: Arc<Mutex<Vec<u16>>>,
     shutdown_tx: broadcast::Sender<bool>,
 }
 
@@ -51,6 +53,7 @@ impl TunnelSupervisor {
         Self {
             status: Arc::new(tokio::sync::Mutex::new(TunnelStatus::offline())),
             should_run: Arc::new(AtomicBool::new(true)),
+            slots: Arc::new(Mutex::new(Vec::new())),
             shutdown_tx,
         }
     }
@@ -62,12 +65,13 @@ impl TunnelSupervisor {
     pub fn start(&self) {
         let status = self.status.clone();
         let should_run = self.should_run.clone();
+        let slots = self.slots.clone();
         let shutdown_tx = self.shutdown_tx.clone();
 
         info!("[TUNNEL] TunnelSupervisor::start() called — spawning rathole loop");
         tokio::spawn(async move {
             info!("[TUNNEL] Background task spawned, entering run_rathole_loop");
-            run_rathole_loop(status, should_run, shutdown_tx).await;
+            run_rathole_loop(status, should_run, slots, shutdown_tx).await;
         });
 
         // Spawn latency measurement task
@@ -75,6 +79,22 @@ impl TunnelSupervisor {
         tokio::spawn(async move {
             run_latency_probe(status_lat).await;
         });
+    }
+
+    /// Atomically replace the set of active device slots and restart the tunnel
+    /// so the new per-slot services take effect. No-op when unchanged.
+    pub fn update_slots(&self, mut slots: Vec<u16>) {
+        slots.sort_unstable();
+        slots.dedup();
+        {
+            let mut current = self.slots.lock().unwrap();
+            if *current == slots {
+                return;
+            }
+            *current = slots;
+        }
+        info!("[TUNNEL] Slots changed to {:?} — restarting tunnel", *self.slots.lock().unwrap());
+        let _ = self.shutdown_tx.send(true);
     }
 
     pub async fn stop(&self) {
@@ -142,15 +162,15 @@ async fn run_latency_probe(status: Arc<tokio::sync::Mutex<TunnelStatus>>) {
 async fn run_rathole_loop(
     status: Arc<tokio::sync::Mutex<TunnelStatus>>,
     should_run: Arc<AtomicBool>,
+    slots: Arc<Mutex<Vec<u16>>>,
     shutdown_tx: broadcast::Sender<bool>,
 ) {
     info!("[TUNNEL] run_rathole_loop entered");
 
-    let config_toml = generate_client_config();
-    info!("[TUNNEL] Generated client config:\n{}", config_toml);
-
     while should_run.load(Ordering::SeqCst) {
-        let config_toml = generate_client_config();
+        let slot_list = slots.lock().unwrap().clone();
+        let config_toml = generate_client_config(&slot_list);
+        info!("[TUNNEL] Generated client config for {} slots:\n{}", slot_list.len(), config_toml);
         let tmp_path = std::env::temp_dir().join("meridian-rathole-client.toml");
 
         if let Err(e) = std::fs::write(&tmp_path, &config_toml) {
@@ -231,8 +251,11 @@ async fn should_run_changed(flag: &Arc<AtomicBool>) {
     }
 }
 
-fn generate_client_config() -> String {
-    format!(
+/// Build the rathole client config for the given active slots. Each slot gets
+/// three services (WDA, bridge, stream) with deterministic tokens that must
+/// match the VPS `rathole-server.toml`.
+fn generate_client_config(slots: &[u16]) -> String {
+    let mut out = format!(
         r#"[client]
 remote_addr = "{vps_addr}"
 retry_interval = 1
@@ -245,31 +268,39 @@ type = "tcp"
 nodelay = true
 keepalive_secs = 10
 keepalive_interval = 3
+"#,
+        vps_addr = VPS_ADDR,
+    );
 
-[client.services.wda]
+    for &slot in slots {
+        out.push_str(&format!(
+            r#"
+[client.services.wda-{slot}]
 type = "tcp"
-token = "{wda_token}"
-local_addr = "127.0.0.1:8100"
+token = "meridian-wda-{slot}"
+local_addr = "127.0.0.1:{wda_local}"
 nodelay = true
 retry_interval = 1
 
-[client.services.bridge]
+[client.services.bridge-{slot}]
 type = "tcp"
-token = "{bridge_token}"
-local_addr = "127.0.0.1:9001"
+token = "meridian-bridge-{slot}"
+local_addr = "127.0.0.1:{bridge_local}"
 nodelay = true
 retry_interval = 1
 
-[client.services.stream]
+[client.services.stream-{slot}]
 type = "tcp"
-token = "{stream_token}"
-local_addr = "127.0.0.1:9200"
+token = "meridian-stream-{slot}"
+local_addr = "127.0.0.1:{stream_local}"
 nodelay = true
 retry_interval = 1
 "#,
-        vps_addr = VPS_ADDR,
-        wda_token = "meridian-wda-token",
-        bridge_token = "meridian-bridge-token",
-        stream_token = "meridian-stream-token",
-    )
+            wda_local = BASE_WDA_PORT + slot,
+            bridge_local = BASE_BRIDGE_PORT + slot,
+            stream_local = BASE_STREAM_PORT + slot,
+        ));
+    }
+
+    out
 }
