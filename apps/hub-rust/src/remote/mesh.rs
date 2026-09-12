@@ -14,6 +14,10 @@ use crate::core::vault::Vault;
 
 const VPS_ADDR: &str = "98.84.189.148:2333";
 const VPS_HOST: &str = "98.84.189.148";
+/// TCP target the latency probe connects to. Deliberately NOT the rathole control
+/// port (`:2333`) — probing that floods the control channel with half-open
+/// connections. nginx on :443 is always up and measures the same host→VPS RTT.
+const VPS_PROBE_ADDR: &str = "98.84.189.148:443";
 
 #[derive(Debug, Clone)]
 pub struct TunnelStatus {
@@ -116,7 +120,7 @@ async fn run_latency_probe(status: Arc<tokio::sync::Mutex<TunnelStatus>>) {
 
         // Measure TCP connection time to VPS
         let start = std::time::Instant::now();
-        let connected = match tokio::net::TcpStream::connect(VPS_ADDR).await {
+        let connected = match tokio::net::TcpStream::connect(VPS_PROBE_ADDR).await {
             Ok(stream) => {
                 drop(stream);
                 true
