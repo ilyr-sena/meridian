@@ -355,7 +355,6 @@ export function PhoneStage({ className }: { className?: string }) {
     in_use_by: string | null
     owned_by_current_user: boolean
     apps: string[]
-    tailscale_ip?: string
     host_ports?: {
       wda?: number
       bridge?: number
@@ -424,39 +423,33 @@ export function PhoneStage({ className }: { className?: string }) {
       (window.location.hostname === "localhost" ||
         window.location.hostname === "127.0.0.1")
 
-    const p = activeDevice?.host_ports || {}
-    const streamPort = p.stream || 9200
-    const wdaPort = p.wda || 8100
-    const bridgePort = p.bridge || 9001
-
+    // Local dev: talk straight to the host-local ports (slot 0).
     if (isLocal) {
       return {
-        streamBase: `http://localhost:${streamPort}`,
-        streamWs: `ws://localhost:${streamPort}/stream.ws`,
-        wdaBase: `http://localhost:${wdaPort}`,
-        controlWs: `ws://localhost:${bridgePort}/ws`,
-        controlHttp: `http://localhost:${bridgePort}`,
+        streamBase: "http://localhost:9200",
+        streamWs: "ws://localhost:9200/stream.ws",
+        wdaBase: "http://localhost:8100",
+        controlWs: "ws://localhost:9001/ws",
+        controlHttp: "http://localhost:9001",
       }
     }
 
-    // Remote via Nginx reverse proxy on meridianhub.cc (secure HTTPS/WSS, zero IP leak)
-    const proto =
-      typeof window !== "undefined" && window.location.protocol === "https:"
-        ? "https:"
-        : "http:"
-    const wsProto = proto === "https:" ? "wss:" : "ws:"
+    // Remote: single secure origin through the VPS nginx reverse proxy. The
+    // published (rathole) ports carried in `host_ports` live in the URL path
+    // under /dev/<port>/... which nginx forwards to the matching local port.
     const host =
       typeof window !== "undefined" ? window.location.host : "meridianhub.cc"
-
-    const targetIp = activeDevice?.tailscale_ip
-    const prefix = targetIp ? `/dev/${targetIp}` : `/dev`
+    const p = activeDevice?.host_ports || {}
+    const streamPort = p.stream || 19100
+    const wdaPort = p.wda || 18100
+    const bridgePort = p.bridge || 19001
 
     return {
-      streamBase: `${proto}//${host}${prefix}/${streamPort}`,
-      streamWs: `${wsProto}//${host}${prefix}/${streamPort}/stream.ws`,
-      wdaBase: `${proto}//${host}${prefix}/${wdaPort}`,
-      controlWs: `${wsProto}//${host}${prefix}/${bridgePort}/ws`,
-      controlHttp: `${proto}//${host}${prefix}/${bridgePort}`,
+      streamBase: `https://${host}/dev/${streamPort}`,
+      streamWs: `wss://${host}/dev/${streamPort}/stream.ws`,
+      wdaBase: `https://${host}/dev/${wdaPort}`,
+      controlWs: `wss://${host}/dev/${bridgePort}/ws`,
+      controlHttp: `https://${host}/dev/${bridgePort}`,
     }
   }, [activeDevice])
 
