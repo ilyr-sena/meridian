@@ -276,6 +276,24 @@ async fn handle_websocket(
     debug!("✓ WebSocket connected on /ws");
 
     let gesture_state = Arc::new(tokio::sync::Mutex::new(GestureState::default()));
+
+    // Gestures are order-sensitive (touch CONTACT/RELEASE stream), but processing
+    // them can block (first touch establishes the CoreDevice media stream). Queue
+    // them onto an ordered worker so the socket read loop never stalls — a stalled
+    // loop is what the browser sees as a dropped "bridge" connection.
+    let (gesture_tx, mut gesture_rx) =
+        tokio::sync::mpsc::unbounded_channel::<serde_json::Value>();
+    {
+        let w = wda.clone();
+        let u = udid.clone();
+        let g = gesture_state.clone();
+        tokio::spawn(async move {
+            while let Some(val) = gesture_rx.recv().await {
+                dispatch_ws_message(val, w.clone(), u.clone(), device_id, g.clone()).await;
+            }
+        });
+    }
+
     let mut buf = [0u8; 4096];
 
     loop {
@@ -334,20 +352,16 @@ async fn handle_websocket(
 
             if opcode == 0x01 {
                 if let Ok(val) = serde_json::from_slice::<serde_json::Value>(&payload) {
-                    let w = wda.clone();
-                    let u = udid.clone();
-                    let g = gesture_state.clone();
-                    // Gestures must be processed in the order they arrive (a
-                    // touch CONTACT/RELEASE stream is order-sensitive), so handle
-                    // down/move/release inline; everything else is dispatched
-                    // on a task so slow commands don't stall the socket loop.
                     let is_gesture = matches!(
                         val["kind"].as_str(),
                         Some("down") | Some("move") | Some("release")
                     );
                     if is_gesture {
-                        dispatch_ws_message(val, w, u, device_id, g).await;
+                        let _ = gesture_tx.send(val);
                     } else {
+                        let w = wda.clone();
+                        let u = udid.clone();
+                        let g = gesture_state.clone();
                         tokio::spawn(async move {
                             dispatch_ws_message(val, w, u, device_id, g).await;
                         });

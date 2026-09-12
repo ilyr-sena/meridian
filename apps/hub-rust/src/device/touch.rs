@@ -6,8 +6,13 @@
 //! tunnel to hold that gate open, then drives the device's `mainTouchscreen`
 //! HID surface with raw reports — giving real-time touch/drag instead of WDA's
 //! buffered, forged `drag` command.
+//!
+//! The device's streamConfig reports `RTCPTimeoutEnabled=True` (20s): without
+//! periodic RTCP Receiver Reports the device tears the stream down after ~25s,
+//! which closes the auth gate. We therefore send an RR+SDES compound every 1s.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
@@ -44,7 +49,7 @@ pub enum TouchPhase {
 
 /// An established live-touch channel: the tunnel handle (kept alive), the
 /// display media-stream client (keeps the HID auth gate open), the RTP socket
-/// being drained, and the Universal HID client used for touch reports.
+/// being drained + RTCP-fed, and the Universal HID client used for touch.
 pub struct TouchSession {
     handle: idevice::tcp::handle::AdapterHandle,
     display: DisplayServiceClient<idevice::tcp::handle::StreamHandle>,
@@ -66,6 +71,56 @@ fn provider(udid: &str, device_id: u32) -> UsbmuxdProvider {
         device_id,
         label: "meridian-hub".to_string(),
     }
+}
+
+/// Pull the RTCP destination + SSRCs out of the device's `streamConfig`
+/// answer. From the device's perspective `LocalSSRC` is *its* SSRC and
+/// `RemoteSSRC` is *ours*.
+fn parse_stream_config(answer: &plist::Value) -> (u16, u32, u32) {
+    let cfg = answer
+        .as_dictionary()
+        .and_then(|d| d.get("connection"))
+        .and_then(|v| v.as_dictionary())
+        .and_then(|d| d.get("streamConfig"))
+        .and_then(|v| v.as_dictionary());
+    let source_port = cfg
+        .and_then(|d| d.get("SourcePort"))
+        .and_then(|v| v.as_unsigned_integer())
+        .unwrap_or(0) as u16;
+    let local_ssrc = cfg
+        .and_then(|d| d.get("RemoteSSRC"))
+        .and_then(|v| v.as_unsigned_integer())
+        .unwrap_or(0) as u32;
+    let remote_ssrc = cfg
+        .and_then(|d| d.get("LocalSSRC"))
+        .and_then(|v| v.as_unsigned_integer())
+        .unwrap_or(0) as u32;
+    (source_port, local_ssrc, remote_ssrc)
+}
+
+/// Build an RTCP compound packet (Receiver Report + SDES/CNAME) — byte-layout
+/// identical to the one the device's mirror expects.
+fn build_rtcp_keepalive(local_ssrc: u32, remote_ssrc: u32, highest_seq: u32) -> Vec<u8> {
+    let mut p = Vec::with_capacity(44);
+    // Receiver Report (PT=201), one report block.
+    p.push(0x81);
+    p.push(0xC9);
+    p.extend_from_slice(&7u16.to_be_bytes()); // length (words - 1)
+    p.extend_from_slice(&local_ssrc.to_be_bytes());
+    p.extend_from_slice(&remote_ssrc.to_be_bytes());
+    p.push(0); // fraction lost
+    p.extend_from_slice(&[0, 0, 0]); // cumulative lost (24-bit)
+    p.extend_from_slice(&highest_seq.to_be_bytes()); // extended highest seq received
+    p.extend_from_slice(&0u32.to_be_bytes()); // interarrival jitter
+    p.extend_from_slice(&0u32.to_be_bytes()); // last SR timestamp
+    p.extend_from_slice(&0u32.to_be_bytes()); // delay since last SR
+    // SDES (PT=202) with empty CNAME.
+    p.push(0x81);
+    p.push(0xCA);
+    p.extend_from_slice(&2u16.to_be_bytes());
+    p.extend_from_slice(&local_ssrc.to_be_bytes());
+    p.extend_from_slice(&[0x01, 0x00, 0x00, 0x00]);
+    p
 }
 
 async fn establish(udid: &str, device_id: u32) -> anyhow::Result<TouchSession> {
@@ -117,9 +172,9 @@ async fn establish(udid: &str, device_id: u32) -> anyhow::Result<TouchSession> {
 
     let answer = display.start_media_stream(params).await?;
     debug!("[TOUCH] media stream started: {:?}", answer);
-    info!(
-        "[TOUCH] CoreDevice display media stream active for {udid} (HID auth gate open)"
-    );
+    info!("[TOUCH] CoreDevice display media stream active for {udid} (HID auth gate open)");
+
+    let (source_port, local_ssrc, remote_ssrc) = parse_stream_config(&answer);
 
     // --- Universal HID service (touch reports) ---
     let uhs_entry = rsd
@@ -134,19 +189,50 @@ async fn establish(udid: &str, device_id: u32) -> anyhow::Result<TouchSession> {
     // backboardd needs a moment to match the HID surfaces against the stream.
     tokio::time::sleep(Duration::from_millis(300)).await;
 
-    // Drain RTP payloads so the socket buffer never fills.
-    let udp_drain = udp.clone();
-    tokio::spawn(async move {
-        loop {
-            match udp_drain.recv().await {
-                Ok(_) => {}
-                Err(e) => {
-                    debug!("[TOUCH] RTP drain ended: {e:?}");
-                    break;
+    let highest_seq = Arc::new(AtomicU32::new(0));
+
+    // Drain RTP payloads + track the highest sequence number for RTCP feedback.
+    {
+        let udp_drain = udp.clone();
+        let highest = highest_seq.clone();
+        tokio::spawn(async move {
+            loop {
+                match udp_drain.recv().await {
+                    Ok(dg) => {
+                        if dg.data.len() >= 4 {
+                            let seq = ((dg.data[2] as u32) << 8) | dg.data[3] as u32;
+                            highest.fetch_max(seq, Ordering::Relaxed);
+                        }
+                    }
+                    Err(e) => {
+                        debug!("[TOUCH] RTP drain ended: {e:?}");
+                        break;
+                    }
                 }
             }
-        }
-    });
+        });
+    }
+
+    // RTCP keep-alive so the device doesn't time the stream out (~20-25s).
+    if source_port != 0 && local_ssrc != 0 && remote_ssrc != 0 {
+        let udp_ka = udp.clone();
+        let highest = highest_seq.clone();
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(Duration::from_secs(1)).await;
+                let pkt = build_rtcp_keepalive(local_ssrc, remote_ssrc, highest.load(Ordering::Relaxed));
+                match udp_ka.send_to(source_port, pkt).await {
+                    Ok(()) => {}
+                    Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => break,
+                    Err(e) => debug!("[TOUCH] RTCP keepalive send failed: {e:?}"),
+                }
+            }
+        });
+    } else {
+        warn!(
+            "[TOUCH] RTCP keepalive disabled — missing streamConfig fields (SourcePort={source_port}, local={local_ssrc}, remote={remote_ssrc})"
+        );
+    }
 
     Ok(TouchSession {
         handle,
