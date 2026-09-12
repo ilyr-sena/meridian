@@ -6,7 +6,7 @@ use std::time::Duration;
 use serde_json::json;
 use tracing::{debug, info};
 
-use crate::core::slots::DevicePorts;
+use crate::core::slots::{DevicePorts, RatholePorts};
 use crate::device::models::DeviceReport;
 
 pub const DEFAULT_API_URL: &str = "https://meridianhub.cc";
@@ -41,10 +41,11 @@ impl HeartbeatWorker {
             while flag.load(Ordering::SeqCst) {
                 let active = is_session_active.load(Ordering::SeqCst);
                 let host_ports = if active {
+                    let rp = RatholePorts::for_slot(report.ports.slot);
                     json!({
-                        "wda": report.ports.wda,
-                        "stream": report.ports.stream,
-                        "bridge": report.ports.bridge,
+                        "wda": rp.wda,
+                        "stream": rp.stream,
+                        "bridge": rp.bridge,
                     })
                 } else {
                     serde_json::Value::Null
@@ -117,15 +118,15 @@ pub async fn sync_session_state(
 
     if let Ok(c) = client {
         let host_ports = if active {
-            if let Some(p) = ports {
-                json!({
-                    "wda": p.wda,
-                    "stream": p.stream,
-                    "bridge": p.bridge,
-                })
-            } else {
-                json!({ "wda": 8100, "stream": 9200, "bridge": 9001 })
-            }
+            let rp = match ports {
+                Some(p) => RatholePorts::for_slot(p.slot),
+                None => RatholePorts::for_slot(0),
+            };
+            json!({
+                "wda": rp.wda,
+                "stream": rp.stream,
+                "bridge": rp.bridge,
+            })
         } else {
             serde_json::Value::Null
         };
