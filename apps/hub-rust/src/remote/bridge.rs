@@ -29,6 +29,7 @@ use idevice::{
 };
 
 use crate::device::actions::{CoreDeviceHid, WdaClient};
+use crate::device::touch;
 
 const WS_GUID: &str = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 
@@ -244,6 +245,9 @@ async fn send_cors_response(
 struct GestureState {
     start: Option<(f32, f32, std::time::Instant)>,
     last: (f32, f32),
+    /// True once a live CoreDevice touch session is driving this gesture
+    /// (otherwise we fall back to a WDA tap/drag on release).
+    live: bool,
 }
 
 async fn handle_websocket(
@@ -329,14 +333,25 @@ async fn handle_websocket(
             offset += payload_len;
 
             if opcode == 0x01 {
-                // Text frame parsed directly from payload bytes and dispatched asynchronously
                 if let Ok(val) = serde_json::from_slice::<serde_json::Value>(&payload) {
                     let w = wda.clone();
                     let u = udid.clone();
                     let g = gesture_state.clone();
-                    tokio::spawn(async move {
+                    // Gestures must be processed in the order they arrive (a
+                    // touch CONTACT/RELEASE stream is order-sensitive), so handle
+                    // down/move/release inline; everything else is dispatched
+                    // on a task so slow commands don't stall the socket loop.
+                    let is_gesture = matches!(
+                        val["kind"].as_str(),
+                        Some("down") | Some("move") | Some("release")
+                    );
+                    if is_gesture {
                         dispatch_ws_message(val, w, u, device_id, g).await;
-                    });
+                    } else {
+                        tokio::spawn(async move {
+                            dispatch_ws_message(val, w, u, device_id, g).await;
+                        });
+                    }
                 }
             }
         }
@@ -373,48 +388,67 @@ async fn dispatch_ws_message(
         "down" => {
             if let (Some(fx), Some(fy)) = (val["fx"].as_f64(), val["fy"].as_f64()) {
                 let (fx, fy) = (fx as f32, fy as f32);
-                let mut st = gesture.lock().await;
-                st.start = Some((fx, fy, std::time::Instant::now()));
-                st.last = (fx, fy);
+                {
+                    let mut st = gesture.lock().await;
+                    st.start = Some((fx, fy, std::time::Instant::now()));
+                    st.last = (fx, fy);
+                    st.live = false;
+                }
+                match touch::touch(&udid, device_id, touch::TouchPhase::Down, fx, fy).await {
+                    Ok(()) => {
+                        gesture.lock().await.live = true;
+                    }
+                    Err(e) => {
+                        debug!("[TOUCH] live touch unavailable, WDA fallback: {e}");
+                    }
+                }
             }
         }
         "move" => {
             if let (Some(fx), Some(fy)) = (val["fx"].as_f64(), val["fy"].as_f64()) {
-                let mut st = gesture.lock().await;
-                st.last = (fx as f32, fy as f32);
+                let (fx, fy) = (fx as f32, fy as f32);
+                let live = {
+                    let mut st = gesture.lock().await;
+                    st.last = (fx, fy);
+                    st.live
+                };
+                if live {
+                    let _ = touch::touch(&udid, device_id, touch::TouchPhase::Move, fx, fy).await;
+                }
             }
         }
         "release" => {
-            let (start_opt, last_pos) = {
-                let mut st = gesture.lock().await;
-                (st.start.take(), st.last)
+            let (fx, fy) = if let (Some(x), Some(y)) = (val["fx"].as_f64(), val["fy"].as_f64()) {
+                (x as f32, y as f32)
+            } else {
+                gesture.lock().await.last
             };
 
-            if let Some((start_fx, start_fy, start_time)) = start_opt {
-                let (end_fx, end_fy) = if let (Some(x), Some(y)) = (val["fx"].as_f64(), val["fy"].as_f64()) {
-                    (x as f32, y as f32)
-                } else {
-                    last_pos
-                };
+            let (start_opt, live) = {
+                let mut st = gesture.lock().await;
+                (st.start.take(), st.live)
+            };
 
-                let dx = (end_fx - start_fx) * 390.0;
-                let dy = (end_fy - start_fy) * 844.0;
+            if live {
+                let _ = touch::touch(&udid, device_id, touch::TouchPhase::Up, fx, fy).await;
+            } else if let Some((start_fx, start_fy, start_time)) = start_opt {
+                // WDA fallback: forge a tap or drag from the buffered gesture.
+                let dx = (fx - start_fx) * 390.0;
+                let dy = (fy - start_fy) * 844.0;
                 let dist = (dx * dx + dy * dy).sqrt();
                 let elapsed = start_time.elapsed().as_secs_f32();
-
                 if dist < 15.0 {
-                    let x = start_fx * 390.0;
-                    let y = start_fy * 844.0;
-                    debug!("📍 Gesture TAP at ({:.1}, {:.1})", x, y);
-                    let _ = wda.tap(x, y).await;
+                    let _ = wda.tap(start_fx * 390.0, start_fy * 844.0).await;
                 } else {
-                    let x1 = start_fx * 390.0;
-                    let y1 = start_fy * 844.0;
-                    let x2 = end_fx * 390.0;
-                    let y2 = end_fy * 844.0;
-                    let duration = elapsed.clamp(0.08, 0.35);
-                    debug!("📍 Gesture SWIPE from ({:.1}, {:.1}) to ({:.1}, {:.1}) duration {:.2}s", x1, y1, x2, y2, duration);
-                    let _ = wda.drag(x1, y1, x2, y2, duration).await;
+                    let _ = wda
+                        .drag(
+                            start_fx * 390.0,
+                            start_fy * 844.0,
+                            fx * 390.0,
+                            fy * 844.0,
+                            elapsed.clamp(0.08, 0.35),
+                        )
+                        .await;
                 }
             }
         }
