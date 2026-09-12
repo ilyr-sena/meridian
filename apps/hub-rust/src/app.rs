@@ -157,6 +157,7 @@ impl MeridianApp {
                     } else {
                         self.devices.push(report.clone());
                     }
+                    self.sync_tunnel_slots();
                     // Start continuous cloud presence heartbeat worker for attached device
                     let session_active = Arc::new(std::sync::atomic::AtomicBool::new(false));
                     let hb = Arc::new(HeartbeatWorker::start(
@@ -184,6 +185,7 @@ impl MeridianApp {
                     info!("Device detached in UI: {}", udid);
                     self.add_log(LogLevel::Warn, format!("Detached iPhone: {}", udid));
                     self.devices.retain(|d| d.udid != udid);
+                    self.sync_tunnel_slots();
                     self.active_tunnels.remove(&udid);
                     if let Some(hb) = self.active_heartbeats.remove(&udid) {
                         hb.stop();
@@ -525,6 +527,11 @@ impl MeridianApp {
             timestamp: chrono::Local::now().format("%H:%M:%S").to_string(),
             message,
         });
+    }
+
+    fn sync_tunnel_slots(&self) {
+        let slots: Vec<u16> = self.devices.iter().map(|d| d.ports.slot).collect();
+        self.tunnel_supervisor.update_slots(slots);
     }
 }
 
