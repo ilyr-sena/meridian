@@ -91,10 +91,23 @@
   function sendStreamDraw(frame) {
     if (c.width !== frame.displayWidth || c.height !== frame.displayHeight) {
       c.width = frame.displayWidth; c.height = frame.displayHeight
+      syncPad()
     }
     ctx2d.drawImage(frame, 0, 0)
     frame.close()
     fpsCount++
+  }
+
+  // Keep the gesture pad exactly over the rendered canvas (which is letterboxed
+  // by `object-fit: contain`-style fitting), so taps/swipes land where the user
+  // points regardless of window size / stream aspect ratio.
+  function syncPad() {
+    const stage = document.getElementById('stage').getBoundingClientRect()
+    const r = c.getBoundingClientRect()
+    pad.style.left = (r.left - stage.left) + 'px'
+    pad.style.top = (r.top - stage.top) + 'px'
+    pad.style.width = r.width + 'px'
+    pad.style.height = r.height + 'px'
   }
 
   function initWebCodecs(m) {
@@ -238,6 +251,7 @@
   // ------------------------------------------------------------------ boot ---
   connectStream()
   connectBridge()
+  window.addEventListener('resize', syncPad)
   log('m', `stream ${STREAM_WS}`)
   log('m', `bridge ${BRIDGE_WS}`)
 })();
