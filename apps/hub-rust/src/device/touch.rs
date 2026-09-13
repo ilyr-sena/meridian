@@ -12,9 +12,9 @@
 //! which closes the auth gate. We therefore send an RR+SDES compound every 1s.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use idevice::{
     IdeviceService, RemoteXpcClient,
@@ -38,6 +38,9 @@ use tracing::{debug, info, warn};
 /// Client-supported-features bitmask the device expects (matches Device Hub).
 const CLIENT_SUPPORTED_FEATURES: u64 = 140;
 const DISPLAY_ID: i64 = 1;
+/// Drop the (costly) auth media stream after this many seconds without a touch,
+/// so the runner's own stream gets the encoder back when the user isn't touching.
+const IDLE_TIMEOUT_SECS: u64 = 20;
 
 /// Which part of a gesture this event is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -55,6 +58,25 @@ pub struct TouchSession {
     display: DisplayServiceClient<idevice::tcp::handle::StreamHandle>,
     uhs: UniversalHidServiceClient<idevice::tcp::handle::StreamHandle>,
     _udp: Arc<idevice::tcp::handle::UdpSocketHandle>,
+    last_activity: Arc<AtomicU64>,
+}
+
+fn now_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
+/// Establish a touch session with a hard timeout. The device can wedge its
+/// media-stream daemon (a half-open RemoteXPC channel then hangs forever);
+/// without a timeout a single wedged establish would hold the cache lock and
+/// permanently kill gestures.
+async fn establish_with_timeout(udid: &str, device_id: u32) -> anyhow::Result<TouchSession> {
+    match tokio::time::timeout(Duration::from_secs(10), establish(udid, device_id)).await {
+        Ok(r) => r,
+        Err(_) => anyhow::bail!("touch session establish timed out (device busy or wedged)"),
+    }
 }
 
 static TOUCH_CACHE: OnceLock<tokio::sync::Mutex<HashMap<String, TouchSession>>> = OnceLock::new();
@@ -234,11 +256,42 @@ async fn establish(udid: &str, device_id: u32) -> anyhow::Result<TouchSession> {
         );
     }
 
+    let last_activity = Arc::new(AtomicU64::new(now_secs()));
+
+    // Watchdog: tear the auth stream down after the idle timeout so the runner's
+    // stream regains the encoder when the user stops touching.
+    {
+        let last = last_activity.clone();
+        let udid = udid.to_string();
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(Duration::from_secs(2)).await;
+                let idle = now_secs().saturating_sub(last.load(Ordering::Relaxed));
+                if idle < IDLE_TIMEOUT_SECS {
+                    continue;
+                }
+                let cache = touch_cache();
+                let mut map = cache.lock().await;
+                // Only drop it if the cached entry is still *this* session.
+                let is_ours = map
+                    .get(&udid)
+                    .map(|s| Arc::ptr_eq(&s.last_activity, &last))
+                    .unwrap_or(false);
+                if is_ours {
+                    info!("[TOUCH] idle {idle}s — tearing down auth stream for {udid}");
+                    map.remove(&udid);
+                }
+                break;
+            }
+        });
+    }
+
     Ok(TouchSession {
         handle,
         display,
         uhs,
         _udp: udp,
+        last_activity,
     })
 }
 
@@ -259,7 +312,7 @@ pub async fn touch(
     let session = match map.get_mut(udid) {
         Some(s) => s,
         None => {
-            let s = establish(udid, device_id).await?;
+            let s = establish_with_timeout(udid, device_id).await?;
             map.insert(udid.to_string(), s);
             map.get_mut(udid)
                 .ok_or_else(|| anyhow::anyhow!("touch session missing"))?
@@ -272,13 +325,15 @@ pub async fn touch(
         TouchPhase::Down | TouchPhase::Move => TOUCHSCREEN_STATE_CONTACT,
     };
 
+    session.last_activity.store(now_secs(), Ordering::Relaxed);
+
     match session.uhs.send_touchscreen(state, x, y, None).await {
         Ok(()) => Ok(()),
         Err(e) => {
             // Stale session (device re-lock / tunnel drop) — reconnect once and retry.
             warn!("[TOUCH] touch session stale ({e}); reconnecting");
             map.remove(udid);
-            let s = establish(udid, device_id).await?;
+            let s = establish_with_timeout(udid, device_id).await?;
             map.insert(udid.to_string(), s);
             let session = map
                 .get_mut(udid)
