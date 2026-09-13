@@ -22,6 +22,9 @@ final class CaptureProbe: NSObject, SCStreamDelegate, SCStreamOutput, SCContentS
     private var backgrounded = false
     private var intervals: [Double] = []
     private var stopError: String?
+    private var captureWidth = 0
+    private var captureHeight = 0
+    private var autoRestarts = 0
 
     private let filterSem = DispatchSemaphore(value: 0)
     private var pendingFilter: SCContentFilter?
@@ -100,6 +103,7 @@ final class CaptureProbe: NSObject, SCStreamDelegate, SCStreamOutput, SCContentS
 
     private func startStream(filter: SCContentFilter, width: Int, height: Int) -> String? {
         stopStreamOnly()
+        lock.lock(); captureWidth = width; captureHeight = height; lock.unlock()
         let sem = DispatchSemaphore(value: 0)
         var errOut: String?
         Task.detached { [self] in
@@ -180,6 +184,10 @@ final class CaptureProbe: NSObject, SCStreamDelegate, SCStreamOutput, SCContentS
         if firstFrameAt == nil { firstFrameAt = now }
         if let last = lastFrameAt {
             intervals.append(Double(now.uptimeNanoseconds - last.uptimeNanoseconds) / 1e6)
+            // Bound the stats ring so a long-lived session can't leak memory.
+            if intervals.count > 6000 {
+                intervals.removeFirst(intervals.count - 6000)
+            }
         }
         lastFrameAt = now
         MJPEGStreamer.shared.publish(sampleBuffer: sampleBuffer)
@@ -191,8 +199,22 @@ final class CaptureProbe: NSObject, SCStreamDelegate, SCStreamOutput, SCContentS
     func stream(_ stream: SCStream, didStopWithError error: Error) {
         lock.lock()
         if stopError == nil { stopError = String(describing: error) }
+        let (w, h) = (captureWidth, captureHeight)
+        autoRestarts += 1
         lock.unlock()
-        print("[ius] stream stopped: \(error)")
+        print("[ius] stream stopped: \(error) — auto-restarting (\(autoRestarts))")
+
+        // Rebuild the capture from the already-granted filter (no picker prompt),
+        // so the stream is perpetual unless the whole app is killed.
+        guard w > 0, h > 0, hasCachedFilter() else { return }
+        DispatchQueue.global().asyncAfter(deadline: .now() + 1.5) { [weak self] in
+            guard let self else { return }
+            if let err = self.restart(width: w, height: h) {
+                print("[ius] auto-restart failed: \(String(describing: err))")
+            } else {
+                print("[ius] capture auto-restarted")
+            }
+        }
     }
 
     // SCContentSharingPickerObserver
