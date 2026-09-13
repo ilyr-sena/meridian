@@ -22,7 +22,7 @@ use crate::device::tunnel::{start_tunnel, ActiveTunnel};
 use crate::remote::bridge::BridgeServer;
 use crate::remote::heartbeat::{send_offline_sync, sync_session_state, HeartbeatWorker};
 use crate::remote::mesh::{TunnelStatus, TunnelSupervisor};
-use crate::sideload::sideloader::{SideloadOptions, Sideloader};
+use crate::sideload::sideloader::{SideloadOptions, Sideloader, TwoFactorPrompt, next_two_factor_prompt};
 use crate::ui::dialogs::sideload::{view_sideload_modal, SideloadDialogState};
 use crate::ui::tabs::{
     devices::view_devices,
@@ -54,6 +54,9 @@ pub enum Message {
     IpaFileSelected(Option<PathBuf>),
     SideloadAppleIdChanged(String),
     SideloadPasswordChanged(String),
+    SideloadTwoFactorCodeChanged(String),
+    SideloadTwoFactor(TwoFactorPrompt),
+    SubmitTwoFactor,
     SubmitSideload,
     SideloadProgress(f32, String),
     SideloadFinished(Result<(), String>),
@@ -113,6 +116,9 @@ impl MeridianApp {
             ipa_path: None,
             apple_id: settings.apple_id.clone(),
             password: String::new(),
+            two_factor_code: String::new(),
+            two_factor_hint: None,
+            two_factor_slot: None,
             progress: 0.0,
             status_message: String::new(),
             is_busy: false,
@@ -336,6 +342,21 @@ impl MeridianApp {
             Message::SideloadPasswordChanged(pwd) => {
                 self.sideload.password = pwd;
             }
+            Message::SideloadTwoFactorCodeChanged(code) => {
+                self.sideload.two_factor_code = code;
+            }
+            Message::SideloadTwoFactor((hint, slot)) => {
+                self.sideload.two_factor_hint = Some(hint);
+                self.sideload.two_factor_slot = Some(slot);
+                self.sideload.two_factor_code.clear();
+            }
+            Message::SubmitTwoFactor => {
+                if let Some(slot) = self.sideload.two_factor_slot.take() {
+                    *slot.lock().unwrap() = Some(self.sideload.two_factor_code.clone());
+                }
+                self.sideload.two_factor_code.clear();
+                self.sideload.two_factor_hint = None;
+            }
             Message::SubmitSideload => {
                 self.sideload.is_busy = true;
                 self.sideload.status_message = "Starting sideload...".to_string();
@@ -349,8 +370,11 @@ impl MeridianApp {
                 };
 
                 return Task::perform(async move {
-                    Sideloader::execute_sideload(opts, |_, _| {}).await
-                        .map_err(|e| e.to_string())
+                    Sideloader::execute_sideload(opts, |p, s| {
+                        info!("[sideload] {:.0}% {s}", p * 100.0);
+                    })
+                    .await
+                    .map_err(|e| e.to_string())
                 }, Message::SideloadFinished);
             }
             Message::SideloadProgress(progress, status) => {
@@ -446,7 +470,8 @@ impl MeridianApp {
     pub fn subscription(&self) -> Subscription<Message> {
         let timer = iced::time::every(Duration::from_secs(1)).map(|_| Message::Tick);
         let monitor_sub = Subscription::run(monitor_subscription);
-        Subscription::batch(vec![timer, monitor_sub])
+        let two_factor_sub = Subscription::run(two_factor_subscription);
+        Subscription::batch(vec![timer, monitor_sub, two_factor_sub])
     }
 
     pub fn view(&self) -> Element<'_, Message> {
@@ -529,6 +554,8 @@ impl MeridianApp {
                 Message::BrowseIpa,
                 Message::SideloadAppleIdChanged,
                 Message::SideloadPasswordChanged,
+                Message::SideloadTwoFactorCodeChanged,
+                Message::SubmitTwoFactor,
                 Message::SubmitSideload,
                 Message::CloseSideload,
             );
@@ -603,4 +630,22 @@ async fn stream_watchdog(udid: String, device_id: u32, stream_port: u16, active:
             }
         }
     }
+}
+
+/// Stream 2FA prompt requests from the sideload login flow into the UI.
+fn two_factor_subscription() -> impl iced::futures::Stream<Item = Message> {
+    use iced::futures::SinkExt;
+    iced::stream::channel(
+        1,
+        |mut output: iced::futures::channel::mpsc::Sender<Message>| async move {
+            loop {
+                match next_two_factor_prompt().await {
+                    Some(prompt) => {
+                        let _ = output.send(Message::SideloadTwoFactor(prompt)).await;
+                    }
+                    None => break,
+                }
+            }
+        },
+    )
 }

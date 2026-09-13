@@ -1,6 +1,7 @@
 //! Sideload Modal Dialog: clean UI with native file picker and progress indicator.
 
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 use iced::{
     alignment,
     widget::{button, column, container, progress_bar, row, text, text_input, Space},
@@ -15,6 +16,9 @@ pub struct SideloadDialogState {
     pub ipa_path: Option<PathBuf>,
     pub apple_id: String,
     pub password: String,
+    pub two_factor_code: String,
+    pub two_factor_hint: Option<String>,
+    pub two_factor_slot: Option<Arc<Mutex<Option<String>>>>,
     pub progress: f32,
     pub status_message: String,
     pub is_busy: bool,
@@ -25,6 +29,8 @@ pub fn view_sideload_modal<'a, Message>(
     on_browse_file: Message,
     on_apple_id_change: impl Fn(String) -> Message + 'a + Copy,
     on_password_change: impl Fn(String) -> Message + 'a + Copy,
+    on_two_factor_change: impl Fn(String) -> Message + 'a + Copy,
+    on_submit_two_factor: Message,
     on_submit: Message,
     on_cancel: Message,
 ) -> Element<'a, Message>
@@ -81,6 +87,33 @@ where
         column![]
     };
 
+    let two_factor_section = if let Some(hint) = &state.two_factor_hint {
+        column![
+            Space::new().height(12),
+            text(hint)
+                .font(FONT_REGULAR)
+                .size(12)
+                .color(ACCENT_AMBER),
+            Space::new().height(4),
+            row![
+                text_input("123456", &state.two_factor_code)
+                    .on_input(on_two_factor_change)
+                    .padding(8)
+                    .size(12)
+                    .width(Length::Fill)
+                    .style(style_text_input),
+                button(text("Verify").font(FONT_MEDIUM).size(12))
+                    .padding([8, 14])
+                    .on_press(on_submit_two_factor)
+                    .style(style_button_primary),
+            ]
+            .spacing(8)
+            .align_y(Alignment::Center),
+        ]
+    } else {
+        column![]
+    };
+
     let actions = row![
         button(text("Cancel").font(FONT_MEDIUM).size(12))
             .padding([7, 16])
@@ -126,6 +159,7 @@ where
                 .size(12)
                 .secure(true)
                 .style(style_text_input),
+            two_factor_section,
             Space::new().height(14),
             progress_section,
             Space::new().height(16),
