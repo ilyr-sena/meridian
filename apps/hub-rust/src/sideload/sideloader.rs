@@ -1,16 +1,50 @@
-//! 100% Pure Rust Sideloading pipeline:
-//! Package extraction, native signing, and USB installation via usbmuxd AFC / InstallationProxy.
+//! Pure Rust sideloading: authenticate with the Apple ID, retrieve/create a
+//! development certificate, sign the unsigned IPA, and install it over USB —
+//! no Python or external `zsign` dependency.
 //!
-//! Provides native file picking via `rfd` and real-time execution with progress reporting.
-//! Zero Python runtime dependency.
+//! 2FA is handled by prompting the UI through a global channel.
 
 use std::path::PathBuf;
-use tracing::info;
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::Duration;
+
+use tokio::sync::mpsc;
+use tracing::{info, warn};
 
 use idevice::provider::UsbmuxdProvider;
 use idevice::usbmuxd::UsbmuxdAddr;
-use isideload::sideload::application::Application;
-use isideload::sideload::install::install_app;
+use isideload::anisette::remote_v3::RemoteV3AnisetteProvider;
+use isideload::auth::apple_account::{
+    AppleAccount, TwoFactorCallbackParams, TwoFactorCallbackResponse,
+};
+use isideload::dev::developer_session::DeveloperSession;
+use isideload::sideload::builder::{MaxCertsBehavior, SideloaderBuilder};
+use isideload::util::fs_storage::FsStorage;
+
+/// A pending 2FA request: a hint to display plus a slot the UI fills with the
+/// user's 6-digit code. `Arc<Mutex<>>` so it is cheaply `Clone`-able into a
+/// `Message`.
+pub type TwoFactorPrompt = (String, Arc<Mutex<Option<String>>>);
+
+static TWO_FACTOR_TX: OnceLock<mpsc::UnboundedSender<TwoFactorPrompt>> = OnceLock::new();
+static TWO_FACTOR_RX: OnceLock<tokio::sync::Mutex<Option<mpsc::UnboundedReceiver<TwoFactorPrompt>>>> =
+    OnceLock::new();
+
+/// Sender used by the login callback to ask the UI for a 2FA code.
+pub fn two_factor_tx() -> &'static mpsc::UnboundedSender<TwoFactorPrompt> {
+    TWO_FACTOR_TX.get_or_init(|| {
+        let (tx, rx) = mpsc::unbounded_channel();
+        TWO_FACTOR_RX.get_or_init(|| tokio::sync::Mutex::new(Some(rx)));
+        tx
+    })
+}
+
+/// Await the next 2FA request (for the UI subscription to drain).
+pub async fn next_two_factor_prompt() -> Option<TwoFactorPrompt> {
+    let rx = TWO_FACTOR_RX.get()?;
+    let mut guard = rx.lock().await;
+    guard.as_mut()?.recv().await
+}
 
 #[derive(Debug, Clone)]
 pub struct SideloadOptions {
@@ -36,37 +70,81 @@ impl Sideloader {
         file.map(|f| f.path().to_path_buf())
     }
 
-    /// Sign and install the IPA onto the target iPhone over USB in pure Rust.
+    /// Authenticate, sign and install the IPA in pure Rust.
     pub async fn execute_sideload(
         opts: SideloadOptions,
         progress_callback: impl Fn(f32, &str) + Send + Sync + 'static,
     ) -> anyhow::Result<()> {
-        progress_callback(0.05, "Validating IPA package...");
-
         if !opts.ipa_path.exists() {
             anyhow::bail!("Selected IPA file does not exist: {:?}", opts.ipa_path);
         }
 
-        // Check if there is an already signed companion (e.g. filename-signed.ipa)
-        let resolved_ipa = if opts.ipa_path.to_string_lossy().contains("unsigned") {
-            let candidate = opts.ipa_path.with_file_name(
-                opts.ipa_path
-                    .file_name()
-                    .unwrap_or_default()
-                    .to_string_lossy()
-                    .replace("unsigned.ipa", "unsigned-signed.ipa"),
-            );
-            if candidate.exists() {
-                info!("Using signed IPA companion: {:?}", candidate);
-                candidate
-            } else {
-                opts.ipa_path.clone()
+        // --- persistent storage for anisette state, certs and profiles ---
+        let storage_root = dirs::data_local_dir()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("meridian")
+            .join("isideload");
+        let anisette_storage = FsStorage::new(storage_root.join("anisette"));
+        let sideloader_storage = FsStorage::new(storage_root.join("sideloader"));
+
+        progress_callback(0.03, "Authenticating with Apple ID...");
+
+        // --- anisette provider (omnisette server) ---
+        let anisette = RemoteV3AnisetteProvider::new(
+            &opts.anisette_url,
+            Box::new(anisette_storage),
+            opts.udid.clone(),
+        )
+        .map_err(|e| anyhow::anyhow!("anisette init failed: {e:#}"))?;
+
+        // --- login (with 2FA callback that prompts the UI) ---
+        let prompt_tx = two_factor_tx().clone();
+        let two_factor_cb = move |params: TwoFactorCallbackParams| {
+            let tx = prompt_tx.clone();
+            async move {
+                if params.unknown {
+                    // No known method yet — request the trusted-device push.
+                    return Ok(TwoFactorCallbackResponse::SendToDevices);
+                }
+                let hint = if params.sms {
+                    "2FA: enter the SMS code sent to your phone".to_string()
+                } else {
+                    "2FA: enter the code shown on your trusted Apple devices".to_string()
+                };
+                let slot = Arc::new(Mutex::new(None));
+                let _ = tx.send((hint, slot.clone()));
+                // Poll for the code (up to ~3 minutes).
+                for _ in 0..360 {
+                    if let Some(code) = slot.lock().unwrap().clone() {
+                        return Ok(TwoFactorCallbackResponse::SubmitCode(code));
+                    }
+                    tokio::time::sleep(Duration::from_millis(500)).await;
+                }
+                Ok(TwoFactorCallbackResponse::Abort)
             }
-        } else {
-            opts.ipa_path.clone()
         };
 
-        info!("Starting pure-Rust sideload for {} on {}", resolved_ipa.display(), opts.udid);
+        let mut account = AppleAccount::builder(&opts.apple_id)
+            .anisette_provider(anisette)
+            .login(&opts.password, two_factor_cb)
+            .await
+            .map_err(|e| anyhow::anyhow!("Apple ID login failed: {e:#}"))?;
+
+        info!("Apple ID authenticated");
+
+        // --- developer session (Xcode auth token) ---
+        let session = DeveloperSession::from_account(&mut account)
+            .await
+            .map_err(|e| anyhow::anyhow!("developer session failed: {e:#}"))?;
+
+        // --- build the signer/installer ---
+        let mut sideloader = SideloaderBuilder::new(session, opts.apple_id.clone())
+            .machine_name("meridian-hub".to_string())
+            .max_certs_behavior(MaxCertsBehavior::Revoke)
+            .storage(Box::new(sideloader_storage))
+            .build();
+
+        progress_callback(0.15, "Provisioning certificate & profile...");
 
         let provider = UsbmuxdProvider {
             addr: UsbmuxdAddr::default(),
@@ -76,31 +154,24 @@ impl Sideloader {
             label: "meridian-hub".to_string(),
         };
 
-        // 1. Extract IPA package in pure Rust
-        progress_callback(0.20, "Extracting application bundle...");
-        let app = Application::new(resolved_ipa)
-            .map_err(|e| anyhow::anyhow!("Failed to parse application bundle: {}", e))?;
-        let app_dir = app.bundle.bundle_dir.clone();
+        let cb = Arc::new(progress_callback);
+        let cb_progress = cb.clone();
+        let isideload_progress = move |pct: f32| {
+            let cb = cb_progress.clone();
+            async move {
+                cb(0.15 + pct * 0.60, "Signing application...");
+            }
+        };
 
-        // 2. Install bundle over USB via usbmuxd AFC and InstallationProxy
-        progress_callback(0.40, "Transferring bundle to iPhone over USB (AFC)...");
-        let cb_arc = std::sync::Arc::new(progress_callback);
-        let cb_clone = cb_arc.clone();
+        sideloader
+            .install_app(&provider, opts.ipa_path.clone(), false, Some(isideload_progress))
+            .await
+            .map_err(|e| anyhow::anyhow!("sideload failed: {e:#}"))?;
 
-        install_app(&provider, &app_dir, move |pct| {
-            let ratio = (pct as f32) / 100.0;
-            let msg = if pct < 70 {
-                format!("Uploading to USB staging: {}%", pct)
-            } else {
-                format!("Installing on iOS: {}%", pct)
-            };
-            cb_clone(0.40 + ratio * 0.58, &msg);
-        })
-        .await
-        .map_err(|e| anyhow::anyhow!("USB installation error: {}", e))?;
+        warn!("native signing completed for {}", opts.udid);
 
-        cb_arc(1.0, "Installation complete!");
-        info!("✓ Pure-Rust sideload installation successful for device {}", opts.udid);
+        cb(1.0, "Installed!");
+        info!("✓ Pure-Rust sideload (signed + installed) successful for {}", opts.udid);
 
         Ok(())
     }

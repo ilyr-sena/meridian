@@ -18,7 +18,7 @@ rfd = "0.17"
 
 # iOS & USB Services
 idevice = { version = "0.1.65", features = ["full"] }
-isideload = { version = "0.3.17", default-features = false, features = ["install", "tokio-mt"] }
+isideload = { version = "0.3.17", default-features = false, features = ["install", "tokio-mt", "fs-storage"] }
 plist = "1.7"
 rusb = "0.9"
 
