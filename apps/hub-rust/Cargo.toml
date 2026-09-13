@@ -74,3 +74,8 @@ lto = false
 codegen-units = 16
 panic = "abort"
 strip = true
+
+# Patched fork: send the full anisette header set (X-Apple-I-MD-LU, routing info,
+# client time) to avoid the Apple GSA 503 on shared omnisette machines.
+[patch.crates-io]
+isideload = { path = "vendor/isideload" }
