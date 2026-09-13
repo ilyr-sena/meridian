@@ -105,7 +105,7 @@ impl MeridianApp {
 
         let settings = SettingsState {
             mask_sensitive: vault_data.sensitive_data_masked,
-            anisette_url: vault_data.anisette_url.unwrap_or_else(|| "http://127.0.0.1:6969".to_string()),
+            anisette_url: vault_data.anisette_url.unwrap_or_else(|| "http://98.84.189.148:6969".to_string()),
             apple_id: vault_data.apple_id.unwrap_or_default(),
             is_saving: false,
         };

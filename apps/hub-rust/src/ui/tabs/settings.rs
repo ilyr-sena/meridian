@@ -63,7 +63,7 @@ where
                 .size(12)
                 .color(TEXT_SECONDARY),
             Space::new().height(4),
-            text_input("http://127.0.0.1:6969", &state.anisette_url)
+            text_input("http://98.84.189.148:6969", &state.anisette_url)
                 .on_input(on_anisette_change)
                 .padding(8)
                 .size(12)
