@@ -295,60 +295,79 @@ async fn handle_websocket(
     }
 
     let mut buf = [0u8; 4096];
+    // Persistent buffer so a WebSocket frame split across TCP reads isn't dropped
+    // (a dropped partial frame corrupts the next frame's parse).
+    let mut pending: Vec<u8> = Vec::new();
 
     loop {
         let n = match stream.read(&mut buf).await {
             Ok(0) | Err(_) => break,
             Ok(n) => n,
         };
+        pending.extend_from_slice(&buf[..n]);
 
-        let mut offset = 0;
-        while offset < n {
-            if offset + 2 > n {
+        loop {
+            if pending.len() < 2 {
                 break;
             }
-            let b0 = buf[offset];
-            let b1 = buf[offset + 1];
+            let b0 = pending[0];
+            let b1 = pending[1];
             let opcode = b0 & 0x0F;
             let masked = (b1 & 0x80) != 0;
             let mut payload_len = (b1 & 0x7F) as usize;
-            offset += 2;
-
-            if opcode == 0x08 {
-                // Connection Close
-                return Ok(());
-            }
+            let mut header_len = 2;
 
             if payload_len == 126 {
-                if offset + 2 > n { break; }
-                payload_len = u16::from_be_bytes([buf[offset], buf[offset + 1]]) as usize;
-                offset += 2;
+                if pending.len() < 4 {
+                    break;
+                }
+                payload_len = u16::from_be_bytes([pending[2], pending[3]]) as usize;
+                header_len = 4;
             } else if payload_len == 127 {
-                if offset + 8 > n { break; }
-                payload_len = u64::from_be_bytes(buf[offset..offset + 8].try_into().unwrap()) as usize;
-                offset += 8;
+                if pending.len() < 10 {
+                    break;
+                }
+                payload_len =
+                    u64::from_be_bytes(pending[2..10].try_into().unwrap()) as usize;
+                header_len = 10;
             }
 
+            if payload_len > 1_048_576 {
+                break;
+            }
+
+            let mut mask_offset = header_len;
             let mask = if masked {
-                if offset + 4 > n { break; }
-                let m = [buf[offset], buf[offset + 1], buf[offset + 2], buf[offset + 3]];
-                offset += 4;
+                if pending.len() < header_len + 4 {
+                    break;
+                }
+                let m = [
+                    pending[header_len],
+                    pending[header_len + 1],
+                    pending[header_len + 2],
+                    pending[header_len + 3],
+                ];
+                mask_offset += 4;
                 Some(m)
             } else {
                 None
             };
 
-            if offset + payload_len > n {
-                break;
+            let total_len = mask_offset + payload_len;
+            if pending.len() < total_len {
+                break; // wait for the rest of the frame
             }
 
-            let mut payload = buf[offset..offset + payload_len].to_vec();
+            let mut payload = pending[mask_offset..total_len].to_vec();
             if let Some(m) = mask {
                 for (i, byte) in payload.iter_mut().enumerate() {
                     *byte ^= m[i % 4];
                 }
             }
-            offset += payload_len;
+
+            if opcode == 0x08 {
+                return Ok(());
+            }
 
             if opcode == 0x01 {
                 if let Ok(val) = serde_json::from_slice::<serde_json::Value>(&payload) {
@@ -368,6 +387,8 @@ async fn handle_websocket(
                     }
                 }
             }
+
+            pending.drain(..total_len);
         }
     }
 
