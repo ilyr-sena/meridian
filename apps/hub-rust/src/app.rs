@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use iced::{
@@ -9,7 +10,7 @@ use iced::{
     window, Element, Length, Subscription, Task,
 };
 use tokio::sync::mpsc;
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::core::slots::SlotManager;
 use crate::core::vault::Vault;
@@ -77,6 +78,7 @@ pub struct MeridianApp {
     active_tunnels: HashMap<String, Vec<Arc<ActiveTunnel>>>,
     active_heartbeats: HashMap<String, Arc<HeartbeatWorker>>,
     active_bridges: HashMap<String, Arc<BridgeServer>>,
+    active_watchdogs: HashMap<String, Arc<AtomicBool>>,
     slot_mgr: SlotManager,
     vault: Vault,
     tunnel_supervisor: Arc<TunnelSupervisor>,
@@ -122,6 +124,7 @@ impl MeridianApp {
             active_tunnels: HashMap::new(),
             active_heartbeats: HashMap::new(),
             active_bridges: HashMap::new(),
+            active_watchdogs: HashMap::new(),
             slot_mgr,
             vault,
             tunnel_supervisor,
@@ -193,6 +196,9 @@ impl MeridianApp {
                     if let Some(b) = self.active_bridges.remove(&udid) {
                         b.stop();
                     }
+                    if let Some(w) = self.active_watchdogs.remove(&udid) {
+                        w.store(false, Ordering::SeqCst);
+                    }
                     let udid_clone = udid.clone();
                     tokio::spawn(async move {
                         send_offline_sync(&udid_clone, None).await;
@@ -247,12 +253,23 @@ impl MeridianApp {
                     dev.state = DeviceState::Running;
                     dev.status_message = format!("Live Streaming on :{}", dev.ports.stream);
                     let ports = dev.ports;
+                    let device_id = dev.device_id;
+                    let stream_port = dev.ports.stream;
                     let udid_clone = udid.clone();
                     if let Some(hb) = self.active_heartbeats.get(&udid) {
                         hb.set_session_active(true);
                     }
                     tokio::spawn(async move {
                         sync_session_state(&udid_clone, true, Some(ports), None).await;
+                    });
+
+                    // Watchdog: relaunch the runner if its stream dies so the
+                    // session is perpetually available.
+                    let active = Arc::new(AtomicBool::new(true));
+                    self.active_watchdogs.insert(udid.clone(), active.clone());
+                    let (wu, wd, wp) = (udid.clone(), device_id, stream_port);
+                    tokio::spawn(async move {
+                        stream_watchdog(wu, wd, wp, active).await;
                     });
                 }
                 self.add_log(LogLevel::Info, format!("✓ Meridian session LIVE for {}", udid));
@@ -276,6 +293,9 @@ impl MeridianApp {
                 }
                 if let Some(hb) = self.active_heartbeats.get(&udid) {
                     hb.set_session_active(false);
+                }
+                if let Some(w) = self.active_watchdogs.remove(&udid) {
+                    w.store(false, Ordering::SeqCst);
                 }
                 if let Some(dev) = self.devices.iter_mut().find(|d| d.udid == udid) {
                     dev.state = DeviceState::Ready;
@@ -547,4 +567,40 @@ fn monitor_subscription() -> impl iced::futures::Stream<Item = Message> {
             let _ = output.send(Message::DeviceEvent(evt)).await;
         }
     })
+}
+
+/// Perpetual-availability watchdog: probes the on-device runner's HTTP server and,
+/// if it stops responding (app jetsam'd / crashed), relaunches it so the stream and
+/// WDA come back without user intervention.
+async fn stream_watchdog(udid: String, device_id: u32, stream_port: u16, active: Arc<AtomicBool>) {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(4))
+        .build()
+        .unwrap_or_default();
+    let url = format!("http://127.0.0.1:{stream_port}/status");
+    let mut failures = 0u32;
+
+    while active.load(Ordering::SeqCst) {
+        tokio::time::sleep(Duration::from_secs(5)).await;
+        if !active.load(Ordering::SeqCst) {
+            break;
+        }
+
+        let healthy = matches!(
+            client.get(&url).send().await,
+            Ok(resp) if resp.status().is_success()
+        );
+
+        if healthy {
+            failures = 0;
+        } else {
+            failures += 1;
+            warn!("[WATCH] runner unresponsive for {udid} ({failures}/3)");
+            if failures >= 3 {
+                info!("[WATCH] relaunching MeridianRunner for {udid}");
+                let _ = launch_meridian_runner(udid.clone(), device_id, stream_port, None).await;
+                failures = 0;
+            }
+        }
+    }
 }
