@@ -95,7 +95,8 @@ impl Sideloader {
             Box::new(anisette_storage),
             opts.udid.clone(),
         )
-        .map_err(|e| anyhow::anyhow!("anisette init failed: {e:#}"))?;
+        .map_err(|e| anyhow::anyhow!("anisette init failed: {e:#}"))?
+        .set_username(opts.apple_id.clone());
 
         // --- login (with 2FA callback that prompts the UI) ---
         let prompt_tx = two_factor_tx().clone();

@@ -32,6 +32,8 @@ pub struct RemoteV3AnisetteProvider {
     serial_number: String,
     client: reqwest_middleware::ClientWithMiddleware,
     websocket_proxy: Option<String>,
+    /// Apple ID email, used to override `X-Apple-I-MD-LU` (GSA 503 workaround).
+    username: Option<String>,
 }
 
 impl RemoteV3AnisetteProvider {
@@ -53,6 +55,7 @@ impl RemoteV3AnisetteProvider {
             serial_number,
             client: Self::build_reqwest_client(None)?,
             websocket_proxy: None,
+            username: None,
         })
     }
 
@@ -102,6 +105,13 @@ impl RemoteV3AnisetteProvider {
         self.serial_number = serial_number;
         self
     }
+
+    /// Set the Apple ID email; used to fill `X-Apple-I-MD-LU` with base64 of the
+    /// username (Apple's GSA 503 workaround — it rejects the omnisette md_lu hash).
+    pub fn set_username(mut self, username: String) -> RemoteV3AnisetteProvider {
+        self.username = Some(username);
+        self
+    }
 }
 
 #[cfg_attr(feature = "wasm", async_trait::async_trait(?Send))]
@@ -141,13 +151,17 @@ impl AnisetteProvider for RemoteV3AnisetteProvider {
                 one_time_password,
                 routing_info,
             } => {
+                let local_user_id = match &self.username {
+                    Some(u) => BASE64_STANDARD.encode(u.as_bytes()),
+                    None => hex::encode(state.get_md_lu()),
+                };
                 let data = AnisetteData {
                     machine_id,
                     one_time_password,
                     routing_info,
                     _device_description: client_info.client_info.clone(),
                     device_unique_identifier: state.get_device_id(),
-                    _local_user_id: hex::encode(state.get_md_lu()),
+                    _local_user_id: local_user_id,
                     generated_at: SystemTime::now(),
                 };
 
