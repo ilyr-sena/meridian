@@ -13,7 +13,7 @@ use tracing::{info, warn};
 
 use idevice::provider::UsbmuxdProvider;
 use idevice::usbmuxd::UsbmuxdAddr;
-use isideload::anisette::remote_v3::RemoteV3AnisetteProvider;
+use isideload::anisette::remote::RemoteAnisetteProvider;
 use isideload::auth::apple_account::{
     AppleAccount, TwoFactorCallbackParams, TwoFactorCallbackResponse,
 };
@@ -84,19 +84,13 @@ impl Sideloader {
             .unwrap_or_else(|| PathBuf::from("."))
             .join("meridian")
             .join("isideload");
-        let anisette_storage = FsStorage::new(storage_root.join("anisette"));
         let sideloader_storage = FsStorage::new(storage_root.join("sideloader"));
 
         progress_callback(0.03, "Authenticating with Apple ID...");
 
-        // --- anisette provider (omnisette server) ---
-        let anisette = RemoteV3AnisetteProvider::new(
-            &opts.anisette_url,
-            Box::new(anisette_storage),
-            opts.udid.clone(),
-        )
-        .map_err(|e| anyhow::anyhow!("anisette init failed: {e:#}"))?
-        .set_username(opts.apple_id.clone());
+        // --- anisette provider (seasons omnisette-server, GET / headers) ---
+        let anisette = RemoteAnisetteProvider::new(&opts.anisette_url)
+            .set_username(opts.apple_id.clone());
 
         // --- login (with 2FA callback that prompts the UI) ---
         let prompt_tx = two_factor_tx().clone();

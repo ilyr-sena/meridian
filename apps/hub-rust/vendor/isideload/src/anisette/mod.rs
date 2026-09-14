@@ -1,3 +1,4 @@
+pub mod remote;
 pub mod remote_v3;
 
 use crate::auth::grandslam::GrandSlam;

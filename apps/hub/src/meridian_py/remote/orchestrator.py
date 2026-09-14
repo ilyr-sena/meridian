@@ -257,11 +257,11 @@ class MultiDeviceOrchestrator:
                 log.warning("failed to start tunneld with elevation: %s", e)
                 return
         else:
-            _NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
+            kws = {"creationflags": 0x08000000} if sys.platform == "win32" else {}
             proc = subprocess.Popen(
                 [sys.executable, "-m", "pymobiledevice3", "remote", "tunneld"],
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                creationflags=_NO_WINDOW,
+                **kws,
             )
             self._tunneld_proc = proc
         for _ in range(30):

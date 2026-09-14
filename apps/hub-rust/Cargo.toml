@@ -79,3 +79,4 @@ strip = true
 # client time) to avoid the Apple GSA 503 on shared omnisette machines.
 [patch.crates-io]
 isideload = { path = "vendor/isideload" }
+

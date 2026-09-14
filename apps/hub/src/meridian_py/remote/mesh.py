@@ -123,14 +123,14 @@ def start_mesh(
         cmd.append(f"-hostname={hostname}")
 
     try:
-        _NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
+        kws = {"creationflags": 0x08000000} if sys.platform == "win32" else {}
         proc = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
             bufsize=1,
-            creationflags=_NO_WINDOW,
+            **kws,
         )
         _mesh_process = proc
 

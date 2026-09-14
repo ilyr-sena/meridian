@@ -83,8 +83,8 @@ def _run_firewall_rules_direct() -> bool:
             f"localport={port_str}", f"description={desc}", "enable=yes",
         ]
         try:
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=10,
-                                    creationflags=0x08000000)
+            kws = {"creationflags": 0x08000000} if sys.platform == "win32" else {}
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=10, **kws)
             if result.returncode != 0:
                 log.warning("firewall rule failed: %s — %s", name, result.stdout.strip())
                 all_ok = False
@@ -188,10 +188,11 @@ def remove_firewall_rules() -> None:
 
     for name, _, _ in _RULES:
         try:
+            kws = {"creationflags": 0x08000000} if sys.platform == "win32" else {}
             subprocess.run(
                 ["netsh", "advfirewall", "firewall", "delete", "rule", f"name={name}"],
                 capture_output=True, timeout=5,
-                creationflags=0x08000000,
+                **kws,
             )
         except Exception:
             pass

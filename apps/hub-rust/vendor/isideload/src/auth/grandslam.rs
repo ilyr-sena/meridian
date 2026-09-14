@@ -191,7 +191,7 @@ impl GrandSlam {
         );
         headers.insert(
             "X-Xcode-Version",
-            HeaderValue::from_static("27.0 (27A5218g)"),
+            HeaderValue::from_static("11.2 (11B41)"),
         );
         headers.insert(
             "X-Apple-App-Info",
@@ -219,6 +219,10 @@ impl GrandSlam {
             .http1_title_case_headers()
             .danger_accept_invalid_certs(debug)
             .connection_verbose(debug)
+            // GSA rejects a second request (e.g. `complete` right after `init`) sent
+            // over the same pooled connection with `429 Too Many Requests`. Disable
+            // idle connection reuse so every request gets its own connection.
+            .pool_max_idle_per_host(0)
             .build()?;
         #[cfg(feature = "wasm")]
         let client = ClientBuilder::new().build()?;
