@@ -22,7 +22,7 @@ use crate::device::tunnel::{start_tunnel, ActiveTunnel};
 use crate::remote::bridge::BridgeServer;
 use crate::remote::heartbeat::{send_offline_sync, sync_session_state, HeartbeatWorker};
 use crate::remote::mesh::{TunnelStatus, TunnelSupervisor};
-use crate::sideload::sideloader::{SideloadOptions, Sideloader, TwoFactorPrompt, next_two_factor_prompt};
+use crate::sideload::sideloader::{SideloadOptions, Sideloader, TwoFactorPrompt, next_two_factor_prompt, two_factor_tx};
 use crate::ui::dialogs::sideload::{view_sideload_modal, SideloadDialogState};
 use crate::ui::tabs::{
     devices::view_devices,
@@ -638,12 +638,14 @@ fn two_factor_subscription() -> impl iced::futures::Stream<Item = Message> {
     iced::stream::channel(
         1,
         |mut output: iced::futures::channel::mpsc::Sender<Message>| async move {
+            // Seed the channel eagerly so the receiver exists before the login
+            // flow ever sends a prompt. Otherwise `next_two_factor_prompt` sees an
+            // uninitialized channel at startup, returns None, and this loop exits
+            // before the 2FA prompt is ever delivered.
+            let _ = two_factor_tx();
             loop {
-                match next_two_factor_prompt().await {
-                    Some(prompt) => {
-                        let _ = output.send(Message::SideloadTwoFactor(prompt)).await;
-                    }
-                    None => break,
+                if let Some(prompt) = next_two_factor_prompt().await {
+                    let _ = output.send(Message::SideloadTwoFactor(prompt)).await;
                 }
             }
         },
