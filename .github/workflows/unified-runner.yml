@@ -8,7 +8,11 @@ on:
 
 jobs:
   build:
-    runs-on: macos-15
+    # Xcode 27 image: the capture probe uses SCContentSharingPicker, which is
+    # iOS 27.0+ only. Xcode 16's SDK (macos-15) has no ScreenCaptureKit for
+    # iOS at all, so the probe compiles into a silent no-op stub and the
+    # screen-recording picker never appears.
+    runs-on: xcode-27
     steps:
       - uses: actions/checkout@v4
 
@@ -32,7 +36,7 @@ jobs:
             -destination 'generic/platform=iOS' \
             -configuration Debug \
             -derivedDataPath build \
-            IPHONEOS_DEPLOYMENT_TARGET=18.0 \
+            IPHONEOS_DEPLOYMENT_TARGET=27.0 \
             GCC_TREAT_WARNINGS_AS_ERRORS=NO \
             SWIFT_TREAT_WARNINGS_AS_ERRORS=NO \
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY=""
