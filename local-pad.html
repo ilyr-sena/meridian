@@ -24,6 +24,18 @@
   #actions { position:absolute; bottom:12px; left:50%; transform:translateX(-50%); display:flex; gap:8px; }
   #log { position:absolute; top:10px; right:10px; width:300px; max-height:40%; overflow-y:auto; font:11px ui-monospace,monospace; background:rgba(0,0,0,.6); border:1px solid var(--line); border-radius:8px; padding:8px; color:var(--dim); pointer-events:none; }
   #log .d { color:var(--acc) } #log .m { color:var(--dim) } #log .u { color:var(--ok) } #log .a { color:var(--warn) }
+  /* keyboard mode */
+  #kbwrap { position:absolute; top:10px; left:10px; width:330px; max-height:calc(100% - 90px); display:none; flex-direction:column; gap:8px;
+            background:rgba(10,10,16,.85); border:1px solid var(--line); border-radius:10px; padding:10px; backdrop-filter:blur(4px); }
+  #kbwrap.open { display:flex }
+  #kbwrap h2 { font-size:12px; font-weight:600; color:var(--fg); display:flex; align-items:center; gap:8px }
+  #kbwrap h2 .chip { margin-left:auto }
+  #kbspecials { display:grid; grid-template-columns:repeat(4,1fr); gap:6px }
+  #kbspecials button { font-size:11px; padding:6px 4px; user-select:none; -webkit-user-select:none }
+  #kbspecials button.active { border-color:var(--acc); background:#16223a; color:var(--acc) }
+  .kbrow { display:flex; gap:6px; align-items:center }
+  .kbrow .lat { font:11px ui-monospace,monospace; color:var(--dim); margin-left:auto }
+  .kbnote { font:10px ui-monospace,monospace; color:var(--dim); line-height:1.5 }
 </style>
 </head>
 <body>
@@ -34,6 +46,7 @@
   <span class="chip" id="bridgeChip"><span class="dot"></span><b id="bridgeState">bridge…</b></span>
   <span class="chip">coords <b id="coordReadout">–</b></span>
   <div class="spacer"></div>
+  <button id="kbToggle">Keyboard</button>
   <button id="fullscreen">Fullscreen</button>
 </header>
 <main id="stage">
@@ -41,6 +54,37 @@
   <div id="pad"></div>
   <div id="coords">fx 0.000 | fy 0.000</div>
   <div id="log"></div>
+  <div id="kbwrap">
+    <h2>Keyboard (CoreDevice HID)
+      <span class="chip" id="kbChip"><span class="dot"></span><b id="kbState">idle</b></span>
+    </h2>
+    <div class="kbnote">Scancode mode: physical keys are relayed as KeyboardEvent.code positions — the phone types with its own layout (dead keys compose on the phone). No input here: enable typing, type anywhere, Escape or toggle to stop.</div>
+    <div class="kbrow">
+      <button id="kbShiftToggle">Shift</button>
+      <span class="lat" id="kbLat">– ms</span>
+    </div>
+    <div id="kbspecials">
+      <button data-code="Enter">⏎ Enter</button>
+      <button data-code="Backspace">⌫ Back</button>
+      <button data-code="Space">Space</button>
+      <button data-code="Tab">⇥ Tab</button>
+      <button data-code="ArrowUp">↑</button>
+      <button data-code="ArrowDown">↓</button>
+      <button data-code="ArrowLeft">←</button>
+      <button data-code="ArrowRight">→</button>
+      <button data-code="Escape">⎋ Esc</button>
+      <button data-code="Delete">⌦ Del</button>
+      <button data-code="Home">Home</button>
+      <button data-code="End">End</button>
+      <button data-code="Comma">,</button>
+      <button data-code="Period">.</button>
+      <button data-code="Minus">-</button>
+      <button data-code="Slash">/</button>
+    </div>
+    <div class="kbrow">
+      <button id="kbHidToggle">Toggle iPhone keyboard (HID)</button>
+    </div>
+  </div>
   <div id="actions">
     <button data-action="home">Home</button>
     <button data-action="lock">Lock</button>
@@ -243,6 +287,146 @@
     })
   })
 
+  // -------------------------------------------------------------- keyboard ---
+  // Typing mode: enable -> capture EVERY physical key at window level (no
+  // input field anywhere) -> relay scancodes -> disable. The phone decodes
+  // each usage with its own configured layout, so dead keys compose accents
+  // on the phone exactly like a real USB keyboard would.
+  const kbwrap = document.getElementById('kbwrap')
+  const kbChip = document.getElementById('kbChip')
+  const kbState = document.getElementById('kbState')
+  const kbLat = document.getElementById('kbLat')
+  const kbShiftBtn = document.getElementById('kbShiftToggle')
+  let kbTyping = false
+  let kbShiftSticky = false
+  let kbActiveTimer = null
+
+  const MOD_CODES = new Set(['ShiftLeft','ShiftRight','ControlLeft','ControlRight','AltLeft','AltRight','MetaLeft','MetaRight'])
+
+  function setKeyboardMode(on) {
+    kbTyping = on
+    kbwrap.classList.toggle('open', on)
+    sendBridge({ kind: 'keyboard', on })
+    log('a', `typing mode ${on ? 'ON' : 'OFF'}`)
+  }
+
+  document.getElementById('kbToggle').onclick = () => setKeyboardMode(!kbTyping)
+
+  function kbMarkActive() {
+    kbChip.classList.add('on'); kbState.textContent = 'live'
+    clearTimeout(kbActiveTimer)
+    kbActiveTimer = setTimeout(() => { kbChip.classList.remove('on'); kbState.textContent = 'idle' }, 400)
+  }
+
+  function sendKey(code, state, shift) {
+    const t0 = performance.now()
+    sendBridge({ kind: state, code, shift: !!shift })
+    kbLat.textContent = (performance.now() - t0).toFixed(1) + ' ms'
+    kbMarkActive()
+    log('a', `${state} ${code}${shift ? ' +shift' : ''}`)
+  }
+
+  function sendText(text) {
+    sendBridge({ kind: 'key_down', text })
+    kbMarkActive()
+    log('a', `text ${JSON.stringify(text)}`)
+  }
+
+  let lastPasteAt = 0
+  function sendPaste(text) {
+    lastPasteAt = Date.now() // dedupe against the paste event
+    sendBridge({ kind: 'paste', text })
+    kbMarkActive()
+    log('a', `paste ${text.length} chars`)
+  }
+
+  function onKeyDown(e) {
+    if (!kbTyping) return
+    if (MOD_CODES.has(e.code)) return
+    if (e.key === 'Escape') { setKeyboardMode(false); return }
+
+    // Dead key: relay its SCANCODE — the phone composes the accent itself
+    // with its own layout (same positions as a real USB keyboard).
+    if (e.key === 'Dead') { e.preventDefault(); sendKey(e.code, 'keydown', e.shiftKey); return }
+
+    // Ctrl/Cmd+V: read the clipboard DIRECTLY and send it as a paste —
+    // browsers never fire the native paste event without an editable focus,
+    // so waiting for it pastes nothing. The V scancode must NOT be relayed.
+    const altgr = e.ctrlKey && e.altKey
+    if ((e.metaKey || (e.ctrlKey && !altgr)) && (e.key === 'v' || e.key === 'V')) {
+      navigator.clipboard?.readText?.().then((text) => {
+        if (text) sendPaste(text)
+      }).catch(() => {})
+      return
+    }
+    // Other browser shortcuts (Cmd+R, Ctrl+T, Ctrl+C...) pass through
+    if (e.metaKey || (e.ctrlKey && !altgr)) return
+    e.preventDefault()
+
+    let shift = e.shiftKey
+    if (e.code.startsWith('Key') && e.getModifierState('CapsLock')) {
+      shift = !shift // Client-side caps so capitals reach the phone regardless
+    }
+
+    // Non-ASCII direct characters (ñ, €, ¿) have no scancode position on the
+    // reference layout — send the exact character as text (layout-independent).
+    if (e.key.length === 1 && e.key.charCodeAt(0) > 127) {
+      sendText(e.key)
+      return
+    }
+
+    sendKey(e.code, 'keydown', shift)
+  }
+
+  function onKeyUp(e) {
+    if (!kbTyping) return
+    if (MOD_CODES.has(e.code)) return
+    if (e.key === 'Dead') { sendKey(e.code, 'keyup', e.shiftKey); return }
+    // The paste key's scancode was never relayed; skip its release too.
+    const altgr = e.ctrlKey && e.altKey
+    if ((e.metaKey || (e.ctrlKey && !altgr)) && (e.key === 'v' || e.key === 'V')) return
+    if (e.key.length === 1 && e.key.charCodeAt(0) > 127) return
+    sendKey(e.code, 'keyup', e.shiftKey)
+  }
+
+  function onPaste(e) {
+    // Skip if a clipboard-read paste just went out (Ctrl+V path).
+    if (Date.now() - lastPasteAt < 800) return
+    const text = e.clipboardData?.getData('text')
+    if (!text) return
+    e.preventDefault()
+    sendPaste(text)
+  }
+
+  // Sticky shift: holds ShiftLeft down like a real modifier until toggled off.
+  kbShiftBtn.onclick = () => {
+    kbShiftSticky = !kbShiftSticky
+    kbShiftBtn.classList.toggle('active', kbShiftSticky)
+    sendKey('ShiftLeft', kbShiftSticky ? 'keydown' : 'keyup', kbShiftSticky)
+  }
+
+  // Special keys: raw down/up on pointer events (held = OS-side repeat).
+  document.querySelectorAll('#kbspecials button').forEach(btn => {
+    const code = btn.dataset.code
+    btn.addEventListener('pointerdown', (e) => {
+      e.preventDefault(); btn.setPointerCapture(e.pointerId)
+      btn.classList.add('active')
+      sendKey(code, 'keydown', kbShiftSticky)
+    })
+    const release = () => {
+      btn.classList.remove('active')
+      sendKey(code, 'keyup', kbShiftSticky)
+    }
+    btn.addEventListener('pointerup', release)
+    btn.addEventListener('pointercancel', release)
+  })
+
+  // HID keyboard toggle on the phone (consumer usage 0x0C/0x01AE).
+  document.getElementById('kbHidToggle').onclick = () => {
+    sendBridge({ kind:'keyboard' })
+    log('a', 'keyboard toggle (HID)')
+  }
+
   document.getElementById('fullscreen').onclick = () => {
     if (document.fullscreenElement) document.exitFullscreen()
     else document.getElementById('stage').requestFullscreen()
@@ -252,6 +436,9 @@
   connectStream()
   connectBridge()
   window.addEventListener('resize', syncPad)
+  window.addEventListener('keydown', onKeyDown, true)
+  window.addEventListener('keyup', onKeyUp, true)
+  window.addEventListener('paste', onPaste, true)
   log('m', `stream ${STREAM_WS}`)
   log('m', `bridge ${BRIDGE_WS}`)
 })();

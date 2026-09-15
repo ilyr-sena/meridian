@@ -494,9 +494,52 @@ async fn dispatch_ws_message(
                 let _ = wda.tap(x, y).await;
             }
         }
-        "key_down" | "key" => {
-            if let Some(key) = val["key"].as_str() {
-                let _ = wda.type_text(key).await;
+        "key_down" | "key" | "keydown" => {
+            // Direct CoreDevice HID keyboard path (scancode-based, single-digit
+            // ms latency). `code` is the KeyboardEvent.code position — the
+            // phone interprets it with its own layout. `shift` wraps the key
+            // for virtual-key uppercase/symbols; `state: "up"` releases a
+            // key held via a previous raw keydown.
+            if let Some(code) = val["code"].as_str().map(str::to_string) {
+                let state = val["state"].as_str().unwrap_or("down").to_string();
+                let shift = val["shift"].as_bool().unwrap_or(false);
+                let udid_str = (*udid).clone();
+                tokio::spawn(async move {
+                    let result = if state == "up" {
+                        crate::device::keyboard::CoreDeviceKeyboard::up(udid_str.clone(), device_id, &code).await
+                    } else {
+                        crate::device::keyboard::CoreDeviceKeyboard::press(
+                            udid_str.clone(),
+                            device_id,
+                            &code,
+                            shift.then_some("shift"),
+                        )
+                        .await
+                    };
+                    if let Err(e) = result {
+                        debug!("[KEYBOARD] HID {code} failed: {e}");
+                    }
+                });
+                return;
+            }
+            // Legacy path: no code — type the text the client provided.
+            if let Some(text) = val["text"].as_str() {
+                if !text.is_empty() {
+                    let _ = wda.type_text(text).await;
+                }
+            }
+        }
+        "key_up" => {
+            if let Some(code) = val["code"].as_str() {
+                let udid_str = (*udid).clone();
+                let code = code.to_string();
+                tokio::spawn(async move {
+                    if let Err(e) =
+                        crate::device::keyboard::CoreDeviceKeyboard::up(udid_str.clone(), device_id, &code).await
+                    {
+                        debug!("[KEYBOARD] HID up {code} failed: {e}");
+                    }
+                });
             }
         }
         "paste" => {

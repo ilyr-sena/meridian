@@ -278,18 +278,18 @@ impl WdaClient {
 /// alive so the tunnel persists) plus the authenticated Indigo HID client.
 /// Reusing it skips the CoreDevice + RSD + XPC handshakes on every button
 /// press, keeping continuous input actions low-latency.
-struct HidSession {
-    handle: idevice::tcp::handle::AdapterHandle,
-    hid: IndigoHidClient<idevice::tcp::handle::StreamHandle>,
+pub(crate) struct HidSession {
+    pub(crate) handle: idevice::tcp::handle::AdapterHandle,
+    pub(crate) hid: IndigoHidClient<idevice::tcp::handle::StreamHandle>,
 }
 
 static HID_CACHE: OnceLock<tokio::sync::Mutex<HashMap<String, HidSession>>> = OnceLock::new();
 
-fn hid_cache() -> &'static tokio::sync::Mutex<HashMap<String, HidSession>> {
+pub(crate) fn hid_cache() -> &'static tokio::sync::Mutex<HashMap<String, HidSession>> {
     HID_CACHE.get_or_init(|| tokio::sync::Mutex::new(HashMap::new()))
 }
 
-async fn create_hid_session(udid: &str, device_id: u32) -> anyhow::Result<HidSession> {
+pub(crate) async fn create_hid_session(udid: &str, device_id: u32) -> anyhow::Result<HidSession> {
     let provider = UsbmuxdProvider {
         addr: UsbmuxdAddr::default(),
         tag: 1,

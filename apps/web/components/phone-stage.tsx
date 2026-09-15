@@ -575,6 +575,7 @@ export function PhoneStage({ className }: { className?: string }) {
   const [streamStatus, setStreamStatus] = useState<StreamStatus>("connecting")
   const [streamStats, setStreamStats] = useState<StreamStats | null>(null)
   const controlWsRef = useRef<WebSocket | null>(null)
+  const lastPasteAtRef = useRef(0)
   const [controlReady, setControlReady] = useState(false)
   const [activeAction, setActiveAction] = useState<string | null>(null)
   const opsRef = useRef<
@@ -841,28 +842,46 @@ export function PhoneStage({ className }: { className?: string }) {
     ;(window as unknown as { __iusTyping: boolean }).__iusTyping = typingMode
     if (!typingMode) return
 
-    function sendKey(msg: Record<string, unknown>, keyStr?: string) {
+    function sendWs(msg: Record<string, unknown>) {
       const ws = controlWsRef.current
-      if (ws && ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify(msg))
-        return
-      }
-      if (keyStr) {
-        getWdaSession(activeEndpoints.wdaBase).then((sid) => {
-          if (sid) {
-            fetch(`${activeEndpoints.wdaBase}/session/${sid}/wda/keys`, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ value: [keyStr] }),
-            }).catch(() => {})
-          }
-        })
-      }
+      if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg))
     }
 
-    // Zero-latency mode: relay the PHYSICAL key (KeyboardEvent.code) as a raw
-    // scancode — the iPhone decodes it with its own configured layout, so any
-    // distribution and dead keys behave exactly like a real keyboard.
+    // Text path fallback (non-ASCII chars / paste) when the bridge is down.
+    function sendTextViaWda(text: string) {
+      getWdaSession(activeEndpoints.wdaBase).then((sid) => {
+        if (sid) {
+          fetch(`${activeEndpoints.wdaBase}/session/${sid}/wda/keys`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ value: [text] }),
+          }).catch(() => {})
+        }
+      })
+    }
+
+    function sendText(text: string) {
+      const ws = controlWsRef.current
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ kind: "key_down", text }))
+        return
+      }
+      sendTextViaWda(text)
+    }
+
+    function sendPaste(text: string) {
+      lastPasteAtRef.current = Date.now() // dedupe against the paste event
+      const ws = controlWsRef.current
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ kind: "paste", text }))
+        return
+      }
+      sendTextViaWda(text)
+    }
+
+    // Scancode mode: every physical key is relayed as its KeyboardEvent.code
+    // position — the iPhone decodes it with its own configured layout, so any
+    // distribution, dead keys and accents behave exactly like a real keyboard.
     const MOD_CODES = new Set([
       "ShiftLeft",
       "ShiftRight",
@@ -880,11 +899,32 @@ export function PhoneStage({ className }: { className?: string }) {
         setTypingModeWithKeyboard(false)
         return
       }
-      if (e.key === "Dead") return // Dead key composing accent; wait for composed char
 
-      // Let browser shortcuts pass through unless AltGr (e.g. Cmd+R, Ctrl+T, Ctrl+C)
+      // Dead key: relay its SCANCODE — the phone composes the accent itself
+      // with its own layout (same positions as a real USB keyboard).
+      if (e.key === "Dead") {
+        e.preventDefault()
+        sendWs({ kind: "keydown", code: e.code, shift: e.shiftKey })
+        return
+      }
+
+      // Ctrl/Cmd+V: read the clipboard DIRECTLY and send it as a paste —
+      // browsers never fire the native paste event without an editable
+      // focus, so waiting for it pastes nothing. The V scancode must NOT be
+      // relayed. (The native paste listener below stays as a deduped
+      // fallback for context-menu pastes.)
       const altgr = e.ctrlKey && e.altKey
-      if ((e.metaKey || (e.ctrlKey && !altgr)) && e.key !== "v" && e.key !== "V") {
+      if ((e.metaKey || (e.ctrlKey && !altgr)) && (e.key === "v" || e.key === "V")) {
+        navigator.clipboard
+          ?.readText?.()
+          .then((text) => {
+            if (text) sendPaste(text)
+          })
+          .catch(() => {})
+        return
+      }
+      // Other browser shortcuts pass through (Cmd+R, Ctrl+T, Ctrl+C...)
+      if (e.metaKey || (e.ctrlKey && !altgr)) {
         return
       }
 
@@ -892,67 +932,43 @@ export function PhoneStage({ className }: { className?: string }) {
 
       let shift = e.shiftKey
       if (e.code.startsWith("Key") && e.getModifierState("CapsLock")) {
-        shift = !shift
+        shift = !shift // Client-side caps so capitals reach the phone regardless
       }
 
-      let textToSend: string | null = null
-      if (e.key === "Backspace") {
-        textToSend = "\b"
-      } else if (e.key === "Enter") {
-        textToSend = "\n"
-      } else if (e.key === "Tab") {
-        textToSend = "\t"
-      } else if (e.key.length === 1) {
-        textToSend = e.key // Exact character from user layout (ñ, á, @, €, ¿, digits, symbols)
+      // Non-ASCII direct characters (ñ, €, ¿) have no scancode position on
+      // the reference layout — send the exact character as text instead
+      // (layout-independent, exact match on the phone).
+      if (e.key.length === 1 && e.key.charCodeAt(0) > 127) {
+        sendText(e.key)
+        return
       }
 
-      const isSpecial = e.key.length === 1 && (e.key.charCodeAt(0) > 127 || "¿¡€£¥§".includes(e.key))
-
-      sendKey({
-        kind: "key_down",
-        text: textToSend,
-        key: e.key,
-        code: e.code,
-        isSpecial,
-        shift,
-        ctrl: e.ctrlKey,
-        alt: e.altKey,
-        meta: e.metaKey,
-      }, textToSend || e.key)
+      sendWs({ kind: "keydown", code: e.code, shift })
     }
 
     function onKeyUp(e: KeyboardEvent) {
       if (MOD_CODES.has(e.code)) return
       if (e.key === "Escape") return
-      sendKey({
-        kind: "key_up",
-        code: e.code,
-        key: e.key,
-        shift: e.shiftKey,
-        ctrl: e.ctrlKey,
-        alt: e.altKey,
-        meta: e.metaKey,
-      })
+      if (e.key === "Dead") {
+        sendWs({ kind: "key_up", code: e.code, shift: e.shiftKey })
+        return
+      }
+      // The paste key's scancode was never relayed; skip its release too.
+      const altgr = e.ctrlKey && e.altKey
+      if ((e.metaKey || (e.ctrlKey && !altgr)) && (e.key === "v" || e.key === "V")) {
+        return
+      }
+      if (e.key.length === 1 && e.key.charCodeAt(0) > 127) return
+      sendWs({ kind: "key_up", code: e.code, shift: e.shiftKey })
     }
 
     function onPaste(e: ClipboardEvent) {
+      // Skip if a clipboard-read paste just went out (Ctrl+V path).
+      if (Date.now() - lastPasteAtRef.current < 800) return
       const text = e.clipboardData?.getData("text")
       if (!text) return
       e.preventDefault()
-      const ws = controlWsRef.current
-      if (ws && ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ kind: "paste", text }))
-        return
-      }
-      getWdaSession(activeEndpoints.wdaBase).then((sid) => {
-        if (sid) {
-          fetch(`${activeEndpoints.wdaBase}/session/${sid}/wda/keys`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ value: [text] }),
-          }).catch(() => {})
-        }
-      })
+      sendPaste(text)
     }
 
     window.addEventListener("keydown", onKeyDown, true)
