@@ -37,6 +37,20 @@ jobs:
             SWIFT_TREAT_WARNINGS_AS_ERRORS=NO \
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY=""
 
+      - name: Fix nested bundle identifiers
+        working-directory: WebDriverAgent
+        run: |
+          APP=$(find build/Build/Products/Debug-iphoneos -maxdepth 1 -name '*Runner.app' | head -1)
+          # Xcode's UI-test runner layout gives the host app id "<base>.xctrunner"
+          # and the embedded .xctest the shorter prefix "<base>". isideload (the
+          # pure-Rust signer) requires app extensions to be NESTED under the host
+          # id ("<host>.<suffix>"). Rewrite the .xctest bundle id so it nests:
+          #   host  = dev.ius.meridian.runner.xctrunner
+          #   xctest= dev.ius.meridian.runner.xctrunner.xctest
+          XCTEST="$APP/PlugIns/WebDriverAgentRunner.xctest"
+          plutil -replace CFBundleIdentifier -string "dev.ius.meridian.runner.xctrunner.xctest" "$XCTEST/Info.plist"
+          echo "xctest bundle id -> $(plutil -extract CFBundleIdentifier raw "$XCTEST/Info.plist")"
+
       - name: Ad-hoc sign app and nested bundles
         working-directory: WebDriverAgent
         run: |
