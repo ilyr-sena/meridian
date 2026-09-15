@@ -111,9 +111,14 @@ final class CaptureProbe: NSObject, SCStreamDelegate, SCStreamOutput, SCContentS
                 let cfg = SCStreamConfiguration()
                 cfg.width = width
                 cfg.height = height
+                // minimumFrameInterval / queueDepth / showsCursor are macOS-only
+                // in the iOS 27 SDK; on iOS the stream paces itself to the
+                // display and the encoder tunes downstream.
+                #if os(macOS)
                 cfg.minimumFrameInterval = CMTime(value: 1, timescale: 60)
                 cfg.queueDepth = 3
                 cfg.showsCursor = false
+                #endif
 
                 let s = SCStream(filter: filter, configuration: cfg, delegate: self)
                 try s.addStreamOutput(self, type: .screen, sampleHandlerQueue: q)
