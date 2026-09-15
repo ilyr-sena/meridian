@@ -1,8 +1,20 @@
 //! 100% Pure Rust iOS application launcher with verification loop and diagnostics.
 //!
-//! Controls CoreDevice and DVT instruments protocols directly over usbmuxd
-//! without any Python or external dependencies.
+//! MeridianRunner is an XCTest UI runner (.xctrunner), so launching it is NOT a
+//! plain CoreDevice app launch: the runner's UI-automation init connects to
+//! `com.apple.testmanagerd`, which only answers once testmanagerd is running —
+//! and testmanagerd only launches when an IDE-style session connects to its
+//! RemoteXPC service (`com.apple.dt.testmanagerd.remote`) over the CoreDevice
+//! RSD tunnel. A plain launch therefore SIGABRTs at startup with
+//! "Failed to initiate daemon session ... No such process".
+//!
+//! This module drives the full testmanagerd orchestration (via the vendored
+//! idevice `dvt::xctest` flow) and waits until WDA answers on its device-side
+//! HTTP port. It also keeps the Developer Disk Image mounted: the runner
+//! links XCTest from /System/Developer, so an unmounted DDI fails earlier at
+//! dyld load time ("Library missing").
 
+use std::sync::Arc;
 use std::time::Duration;
 use tracing::{debug, info, warn};
 
@@ -12,6 +24,8 @@ use idevice::{
     services::{
         core_device::AppServiceClient,
         core_device_proxy::CoreDeviceProxy,
+        dvt::xctest::{TestConfig, XCUITestService},
+        installation_proxy::InstallationProxyClient,
         rsd::RsdHandshake,
     },
     usbmuxd::UsbmuxdAddr,
@@ -42,9 +56,9 @@ async fn launch_meridian_runner_inner(
     let target_bundle = bundle_id_hint.unwrap_or_else(|| DEFAULT_RUNNER_BUNDLE.to_string());
     info!("🚀 Launching MeridianRunner ({target_bundle}) on device {udid} (device_id: {device_id})...");
 
-    // 0. Ensure the Developer Disk Image is mounted. CoreDevice only advertises
-    //    its app-launch service while the DDI is mounted; a reboot unmounts it,
-    //    which otherwise surfaces as "AppService not advertised on RSD".
+    // 0. Ensure the Developer Disk Image is mounted. The runner links XCTest
+    //    from /System/Developer, so without it the launch fails at dyld load
+    //    time ("Library missing") before main() is ever reached.
     if let Err(e) = crate::device::ddi::ensure_developer_image_mounted(&udid, device_id).await {
         anyhow::bail!("Developer Disk Image unavailable: {e}");
     }
@@ -120,9 +134,16 @@ async fn kill_meridian_runner_inner(
     Ok(())
 }
 
-/// Pure Rust CoreDevice / DVT application launcher
+/// Pure Rust testmanagerd launch: establishes the IDE-style session over the
+/// CoreDevice RSD tunnel (which starts testmanagerd on demand), launches the
+/// runner inside a real XCTest session and waits until WDA answers on its
+/// device-side HTTP port. A plain CoreDevice app launch is NOT sufficient —
+/// the runner's UI-automation init aborts without a live testmanagerd daemon.
 async fn invoke_native_launch(udid: &str, device_id: u32, bundle_id: &str) -> anyhow::Result<()> {
-    debug!("Invoking native pure-Rust launch for {} on {} (ID: {})", bundle_id, udid, device_id);
+    debug!(
+        "Starting xctrunner test-session launch for {} on {} (ID: {})",
+        bundle_id, udid, device_id
+    );
 
     let provider = UsbmuxdProvider {
         addr: UsbmuxdAddr::default(),
@@ -132,68 +153,21 @@ async fn invoke_native_launch(udid: &str, device_id: u32, bundle_id: &str) -> an
         label: "meridian-hub".to_string(),
     };
 
-    // Primary: iOS 17+ CoreDeviceProxy over usbmuxd + in-process jktcp TCP stack
-    match CoreDeviceProxy::connect(&provider).await {
-        Ok(proxy) => {
-            let rsd_port = proxy.tunnel_info().server_rsd_port;
-            let adapter = proxy.create_software_tunnel()?;
-            let mut handle = adapter.to_async_handle();
+    // Runner bundle info (on-device paths + executable) from installation proxy.
+    let mut install = InstallationProxyClient::connect(&provider).await?;
+    let cfg = TestConfig::from_installation_proxy(&mut install, bundle_id, None).await?;
 
-            // Retry RSD handshake up to 3 times with delay
-            let mut rsd = None;
-            for attempt in 1..=3u32 {
-                tokio::time::sleep(Duration::from_millis(500 * u64::from(attempt))).await;
-                match handle.connect(rsd_port).await {
-                    Ok(rsd_stream) => {
-                        match RsdHandshake::new(rsd_stream).await {
-                            Ok(r) => {
-                                debug!("RSD attempt {} succeeded with {} services", attempt, r.services.len());
-                                for (name, entry) in &r.services {
-                                    debug!("  RSD service: {} -> port {}", name, entry.port);
-                                }
-                                if r.services.contains_key("com.apple.coredevice.appservice") {
-                                    rsd = Some(r);
-                                    break;
-                                }
-                                warn!("RSD attempt {}: appservice not in services list, retrying...", attempt);
-                                rsd = Some(r); // keep last result for error message
-                            }
-                            Err(e) => {
-                                warn!("RSD attempt {} handshake failed: {:?}", attempt, e);
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        warn!("RSD attempt {} connect failed: {:?}", attempt, e);
-                    }
-                }
-            }
+    // Full testmanagerd orchestration (connect -> session -> launch -> test
+    // plan). WDA readiness is polled on the device-side HTTP port; the
+    // orchestration task keeps running detached so the runner stays alive
+    // after this call returns.
+    let service = XCUITestService::new(Arc::new(provider));
+    service
+        .run_until_wda_ready(cfg, Duration::from_secs(180))
+        .await?;
 
-            let rsd = rsd.ok_or_else(|| anyhow::anyhow!("Failed to establish RSD connection after 3 attempts"))?;
-
-            let app_entry = rsd
-                .services
-                .get("com.apple.coredevice.appservice")
-                .ok_or_else(|| anyhow::anyhow!("CoreDevice AppService not advertised on RSD. Available: {:?}", rsd.services.keys().collect::<Vec<_>>()))?;
-
-            let app_stream = handle.connect(app_entry.port).await?;
-            let mut app_service = AppServiceClient::new(app_stream).await?;
-
-            debug!("Connected to CoreDevice AppService via RSD on port {}. Launching...", app_entry.port);
-            const EMPTY_ARGS: &[&'static str] = &[];
-            let resp = app_service
-                .launch_application(bundle_id, EMPTY_ARGS, true, false, None, None, None)
-                .await?;
-
-            info!("✓ Native CoreDevice launched {} with PID {}", bundle_id, resp.pid);
-            return Ok(());
-        }
-        Err(e) => {
-            debug!("CoreDeviceProxy connection failed ({:?})", e);
-        }
-    }
-
-    anyhow::bail!("Failed to launch application {} via native iOS protocols", bundle_id);
+    info!("✓ XCTest session established, WDA ready for {bundle_id}");
+    Ok(())
 }
 
 /// Pure Rust CoreDevice application terminator
