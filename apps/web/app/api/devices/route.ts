@@ -64,9 +64,18 @@ export async function GET() {
       const rawInUseBy = deviceUserMap.get(id) ?? null
       const inUseBy = isOnline ? rawInUseBy : null
 
-      let badge: "in_use" | "available" | "offline"
+      // A hub-rust session is started when the device's heartbeat carries
+      // non-null host_ports (the hub nulls them while no session runs).
+      const hasHubSession =
+        isOnline && typeof d.host_ports?.stream === "number"
+
+      let badge: "in_use" | "available" | "online" | "offline"
       if (!isOnline) {
         badge = "offline"
+      } else if (!hasHubSession) {
+        // Detected by the hub but no session started in hub-rust yet —
+        // nothing to stream, so the device is not usable from the web.
+        badge = "online"
       } else if (inUseBy) {
         badge = "in_use"
       } else {

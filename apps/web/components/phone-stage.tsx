@@ -351,7 +351,7 @@ export function PhoneStage({ className }: { className?: string }) {
     model: string
     version: string
     status: string
-    badge: "in_use" | "available" | "offline"
+    badge: "in_use" | "available" | "online" | "offline"
     in_use_by: string | null
     owned_by_current_user: boolean
     apps: string[]
@@ -1459,7 +1459,7 @@ export function PhoneStage({ className }: { className?: string }) {
                     <Label
                       htmlFor={`device-${d._id}`}
                       className={cn(
-                        "flex items-center justify-start rounded-2xl border border-white/5 bg-white/5 py-2.5 pr-2 pl-3 transition-colors peer-data-checked:border-primary peer-data-checked:bg-primary/20 hover:bg-white/10",
+                        "relative flex items-center justify-start rounded-2xl border border-white/5 bg-white/5 py-2.5 pr-2 pl-3 transition-colors peer-data-checked:border-primary peer-data-checked:bg-primary/20 hover:bg-white/10",
                         d.badge === "available" || (d.badge === "in_use" && d.owned_by_current_user)
                           ? "cursor-pointer"
                           : "pointer-events-none opacity-55"
@@ -1481,7 +1481,9 @@ export function PhoneStage({ className }: { className?: string }) {
                               ? "In Use"
                               : d.badge === "available"
                                 ? "Available"
-                                : "Offline"}
+                                : d.badge === "online"
+                                  ? "Online"
+                                  : "Offline"}
                           </Badge>
                         </span>
                         <span className="text-left text-[0.6875rem] text-muted-foreground">
@@ -1507,6 +1509,7 @@ export function PhoneStage({ className }: { className?: string }) {
               disabled={
                 !previewDevice ||
                 previewDevice.badge === "offline" ||
+                previewDevice.badge === "online" ||
                 (previewDevice.badge === "in_use" &&
                   !previewDevice.owned_by_current_user) ||
                 (!!activeSession && previewDeviceId === sessionDeviceId)
@@ -1559,7 +1562,7 @@ export function PhoneStage({ className }: { className?: string }) {
             <div className="h-full overflow-y-auto p-4 pt-3 pb-12">
               <div className="flex flex-col gap-2">
                 {activeSession && (
-                  <div className="flex cursor-pointer items-center gap-2.5 rounded-2xl border border-primary/30 bg-primary/10 py-2.5 pr-2 pl-3 transition-colors hover:bg-primary/15">
+                  <div className="relative flex cursor-pointer items-center gap-2.5 rounded-2xl border border-primary/30 bg-primary/10 py-2.5 pr-2 pl-3 transition-colors hover:bg-primary/15">
                     <HugeiconsIcon
                       icon={Activity01Icon}
                       size={22}
@@ -1590,7 +1593,7 @@ export function PhoneStage({ className }: { className?: string }) {
                 {pastSessions.map((s) => (
                   <div
                     key={s._id}
-                    className="flex cursor-pointer items-center gap-2.5 rounded-2xl border border-white/5 bg-white/5 py-2.5 pr-3 pl-3 transition-colors hover:bg-white/10"
+                    className="relative flex cursor-pointer items-center gap-2.5 rounded-2xl border border-white/5 bg-white/5 py-2.5 pr-3 pl-3 transition-colors hover:bg-white/10"
                   >
                     <HugeiconsIcon
                       icon={Activity01Icon}
