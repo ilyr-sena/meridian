@@ -1511,7 +1511,7 @@ export function PhoneStage({ className }: { className?: string }) {
                           {d.name}
                           <Badge
                             variant="outline"
-                            className="absolute right-3 h-4 py-0 text-[10px] leading-none"
+                            className="absolute right-2.5 h-4 py-0 text-[10px] leading-none"
                           >
                             {d.badge === "in_use"
                               ? "In Use"
@@ -1608,7 +1608,7 @@ export function PhoneStage({ className }: { className?: string }) {
                     <div className="flex min-w-0 flex-1 flex-col gap-0.5">
                       <span className="truncate text-xs font-medium select-none">
                         Current Session
-                        <span className="absolute right-3.5 font-mono text-[11px] tracking-tight text-muted-foreground select-none">
+                        <span className="absolute right-3 font-mono text-[11px] tracking-tight text-muted-foreground select-none">
                           {elapsed}
                         </span>
                       </span>
@@ -1640,7 +1640,7 @@ export function PhoneStage({ className }: { className?: string }) {
                     <div className="flex min-w-0 flex-1 flex-col gap-0.5">
                       <span className="truncate text-xs font-medium select-none">
                         {s.id}
-                        <span className="absolute right-7 font-mono text-[11px] tracking-tight text-muted-foreground select-none">
+                        <span className="absolute right-3 font-mono text-[11px] tracking-tight text-muted-foreground select-none">
                           {formatSessionTime(s.started)}
                         </span>
                       </span>
