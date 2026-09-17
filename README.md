@@ -123,21 +123,36 @@ MERIDIAN-PROJECT/
    - Replaced all legacy Python scripts (`pymobiledevice3`, `sideload-engine.py`, `meridian_py`).
    - App launching, process termination, device enrichment, and sideloading run natively via `idevice`, `isideload`, `tokio`, and `iced`.
 
-2. **WebCodecs Hardware GPU Streaming (`avc1.64002a`)**:
+2. **Real-Time Device Health (Orthogonal State + 3s Poller)**:
+   - Combinable `DeviceHealth` model (`installed × developer_mode × locked × paired`) with tri-state logic (`Yes/No/Unknown`).
+   - Real-time health poller (3s interval, debounced) emits `Updated` events for install/uninstall, Developer Mode toggle, lock/unlock — UI reflects changes instantly without re-launch.
+   - Guarded session states: live sessions only downgraded on hard health regressions (uninstalled/locked/Developer Mode off).
+
+3. **VPS IPA Sideload (No Local File Picker)**:
+   - Hub fetches the latest unsigned `MeridianRunner.ipa` from the VPS (`/runner/manifest.json` + `MeridianRunner-unsigned.ipa`).
+   - SHA-256 + size verification, local cache, no local file picker ever.
+   - One-click "Sideload Runner" button; no "Re-Sideload" button (uninstall → auto-detected → Sideload button reappears).
+
+4. **Vault Credential Auto-Save & Reuse**:
+   - Apple ID + password + anisette URL saved to encrypted vault on successful sideload.
+   - Next sideload auto-uses vault password when field left blank — no re-prompt unless credentials expired.
+   - Works identically on Linux and Windows.
+
+5. **WebCodecs Hardware GPU Streaming (`avc1.64002a`)**:
    - Ultra-low latency H.264 video decoding using browser WebCodecs API (`window.VideoDecoder`).
    - Delivered over secure HTTPS/WSS contexts to eliminate software MSE buffering and drift.
    - `requestAnimationFrame` render loop synchronizes paints with display VSync.
 
-3. **Dynamic Multi-Node Tailscale Mesh**:
-   - Dynamic routing pattern: `/dev/<tailscale_ip>/<port>/<path>`.
-   - Host nodes auto-register with dynamic machine hostnames (`meridian-<hostname>`).
-   - Nginx on VPS routes traffic dynamically without hardcoded IPs.
+6. **Dynamic Multi-Node Rathole Mesh**:
+   - Replaced Tailscale with pure-Rust in-process rathole client; one outbound TCP connection.
+   - Dynamic routing: nginx `/dev/<port>/<path>` → loopback rathole service.
+   - Rathole control channel `98.84.189.148:2333`; published ports `18100+/19001+/19200+`.
 
-4. **Action & Control Bridge Server (Port 9001)**:
+7. **Action & Control Bridge Server (Port 9001)**:
    - HTTP endpoints: `GET /apps.json`, `GET /apps/running.json`, `GET /icon/:bid.png`, `POST /app/launch/:bid`, `POST /app/kill/:pid`.
-   - WebSocket (`/ws`): Bidirectional touch coordinate normalization (taps, drags, swipes), keyboard input, and hardware button dispatch.
+   - WebSocket (`/ws`): Bidirectional touch coordinate normalization (taps, drags, swipes), keyboard scancode relay (phone uses its own layout), hardware button dispatch, clipboard paste via `navigator.clipboard.readText()`.
 
-5. **Real-Time Session Lifecycle & Port Management**:
+8. **Real-Time Session Lifecycle & Port Management**:
    - MongoDB Change Streams coupled with Server-Sent Events (`/api/events`) drive instant UI state changes.
    - Session stop cleanly clears allocated `host_ports` and terminates runner instances on device.
 

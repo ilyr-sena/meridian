@@ -82,12 +82,52 @@ the host-local ports), and always includes `udid` for `udid ↔ ports` correlati
 
 The React client keys off `host_ports` (no IP/UUID needed in the URL).
 
+Rathole control channel: `98.84.189.148:2333`.
+
 ---
 
-## 6. Public Endpoints Exposed to the Browser
+## 6. Runner IPA Distribution (VPS Static Serving)
+
+The unsigned MeridianRunner IPA is served statically from the VPS via nginx for
+the hub to fetch during sideload — no companion tool or local file required.
+
+| Function | Browser URL | Served From |
+| :--- | :--- | :--- |
+| Runner Manifest | `https://meridianhub.cc/runner/manifest.json` | `/var/www/meridian-runner/manifest.json` |
+| Runner IPA | `https://meridianhub.cc/runner/MeridianRunner-unsigned.ipa` | `/var/www/meridian-runner/MeridianRunner-unsigned.ipa` |
+
+**Manifest format** (`/runner/manifest.json`):
+```json
+{
+  "version": "1.0",
+  "url": "https://meridianhub.cc/runner/MeridianRunner-unsigned.ipa",
+  "sha256": "3aafd9bcf14bd8504f18ac2f6397ffc46962acc8e19238fe8c62953558a5bfda",
+  "size": 11687731
+}
+```
+
+The hub polls this manifest on every sideload attempt, downloads the IPA only
+when the version changes, and verifies SHA-256 + size before signing + install.
+
+**Nginx config** (inside the 443 server block):
+```
+location /runner/ {
+    alias /var/www/meridian-runner/;
+    add_header Cache-Control "no-cache" always;
+}
+```
+
+**Publish helper**: `runner/tools/publish_ipa.sh` — uploads a freshly-built IPA to
+the VPS and regenerates `manifest.json` with correct version + SHA-256.
+
+---
+
+## 7. Public Endpoints Exposed to the Browser
 
 - **Stream (H.264 + MJPG)**: `https://meridianhub.cc:19200/stream.ws` / `…:19200/stream?…` (stunnel TLS)
 - **Control WebSocket**: `wss://meridianhub.cc/dev/19001/ws`
 - **Installed Apps**: `https://meridianhub.cc/dev/19001/apps.json`
 - **App Icon**: `https://meridianhub.cc/dev/19001/icon/<bundle_id>.png`
 - **WDA Automation**: `https://meridianhub.cc/dev/18100/status`
+- **Runner Manifest**: `https://meridianhub.cc/runner/manifest.json`
+- **Runner IPA**: `https://meridianhub.cc/runner/MeridianRunner-unsigned.ipa`
