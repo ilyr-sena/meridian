@@ -4,6 +4,8 @@
 //! Remote Bridge (9001-9032), and Tunneld (49151) silently when elevated.
 
 
+use tracing::{info, warn};
+
 pub fn ensure_firewall_rules() {
     #[cfg(windows)]
     {

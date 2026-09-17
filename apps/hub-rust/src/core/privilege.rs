@@ -1,6 +1,6 @@
 //! Process privilege detection and UAC elevation handling.
 
-use tracing::info;
+use tracing::{info, warn};
 
 /// Check if current process has administrative/root privileges.
 pub fn is_admin() -> bool {
