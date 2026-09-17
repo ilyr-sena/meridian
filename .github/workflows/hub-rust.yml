@@ -23,6 +23,8 @@ jobs:
       - name: Build release
         working-directory: apps/hub-rust
         run: cargo build --release
+        env:
+          RUSTFLAGS: "-C link-arg=advapi32.lib"
 
       - name: Package binary
         working-directory: apps/hub-rust
