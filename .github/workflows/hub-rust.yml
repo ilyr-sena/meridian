@@ -29,7 +29,8 @@ jobs:
       - name: Package binary
         working-directory: apps/hub-rust
         run: |
-          copy target\release\meridian-hub.exe dist\meridian-windows-amd64.exe
+          New-Item -ItemType Directory -Force -Path dist
+          Copy-Item target\release\meridian-hub.exe dist\meridian-windows-amd64.exe
 
       - name: Upload Windows artifact
         uses: actions/upload-artifact@v4
