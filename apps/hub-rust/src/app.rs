@@ -642,7 +642,7 @@ fn monitor_subscription() -> impl iced::futures::Stream<Item = Message> {
             let tx = tx.clone();
             tokio::spawn(async move {
                 loop {
-                    tokio::time::sleep(Duration::from_secs(3)).await;
+                    tokio::time::sleep(Duration::from_secs(1)).await;
                     let snapshots: Vec<DeviceReport> = {
                         devices.lock().unwrap().values().cloned().collect()
                     };

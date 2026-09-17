@@ -59,6 +59,13 @@ pub async fn query_lockdown(device_id: u32, _udid: &str) -> anyhow::Result<Lockd
     let mut req = plist::Dictionary::new();
     req.insert("Request".into(), plist::Value::String("GetValue".into()));
     req.insert("Label".into(), plist::Value::String("meridian-hub".into()));
+    req.insert("Key".into(), plist::Value::Array(vec![
+        plist::Value::String("DeviceName".into()),
+        plist::Value::String("ProductType".into()),
+        plist::Value::String("ProductVersion".into()),
+        plist::Value::String("BuildVersion".into()),
+        plist::Value::String("SerialNumber".into()),
+    ]));
 
     let mut req_xml = Vec::new();
     plist::to_writer_xml(&mut req_xml, &req)?;

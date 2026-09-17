@@ -149,6 +149,21 @@ impl DeviceReport {
     /// Transient `Error` states are preserved until health reports a concrete
     /// (non-Ready) condition.
     pub fn apply_health(&mut self, other: &DeviceReport) {
+        if !other.name.is_empty() && other.name != "iPhone" {
+            self.name = other.name.clone();
+        }
+        if !other.model.is_empty() && other.model != "Apple Device" {
+            self.model = other.model.clone();
+        }
+        if !other.os_version.is_empty() && other.os_version != "iOS" {
+            self.os_version = other.os_version.clone();
+        }
+        if !other.build_version.is_empty() {
+            self.build_version = other.build_version.clone();
+        }
+        if other.serial_number.is_some() {
+            self.serial_number = other.serial_number.clone();
+        }
         self.health = other.health;
         self.state = other.state;
         if matches!(
