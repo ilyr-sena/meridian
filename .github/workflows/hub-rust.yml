@@ -1,0 +1,33 @@
+name: hub-rust-windows
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "apps/hub-rust/**"
+      - ".github/workflows/hub-rust.yml"
+    tags:
+      - "hub-v*"
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build release
+        working-directory: apps/hub-rust
+        run: cargo build --release
+
+      - name: Package binary
+        working-directory: apps/hub-rust
+        run: |
+          copy target\release\meridian-hub.exe dist\meridian-windows-amd64.exe
+
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: meridian-windows-amd64
+          path: apps/hub-rust/dist/meridian-windows-amd64.exe
