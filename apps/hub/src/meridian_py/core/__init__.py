@@ -1,1 +1,0 @@
-"""Meridian Core Engine package."""

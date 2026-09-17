@@ -11,14 +11,9 @@ export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$HOME/.cargo/target/meridian-hub}"
 
 cargo build --release
 
-mkdir -p "$DIR/dist/bin"
+mkdir -p "$DIR/dist"
 cp --remove-destination -f "$CARGO_TARGET_DIR/release/meridian-hub" "$DIR/dist/meridian"
 chmod +x "$DIR/dist/meridian"
-
-# Bundle native sidecar binaries alongside the executable
-cp --remove-destination -rf "$DIR/bin/"* "$DIR/dist/bin/"
-chmod +x "$DIR/dist/bin/meridian-mesh"* 2>/dev/null || true
-chmod +x "$DIR/dist/bin/zsign"* 2>/dev/null || true
 
 # Install the app icon + desktop entry so the taskbar/dock shows the Meridian
 # icon. Linux window managers source the taskbar icon from the .desktop entry
