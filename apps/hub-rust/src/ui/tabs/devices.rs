@@ -1,11 +1,15 @@
 //! Devices Tab: real-time cards of attached iPhones with session controls.
+//!
+//! The card's look and actions are driven by the *combinable* device health
+//! (installed × developer-mode × locked × paired) plus the app-level session
+//! phase. Every combination resolves to a coherent pill, message and button set.
 
 use iced::{
     alignment,
     widget::{button, column, container, row, scrollable, text, Space},
-    Alignment, Element, Length,
+    Alignment, Color, Element, Length,
 };
-use crate::device::models::{DeviceReport, DeviceState};
+use crate::device::models::{DeviceReport, DeviceState, SessionPhase};
 use crate::ui::theme::*;
 
 pub fn view_devices<'a, Message>(
@@ -34,6 +38,19 @@ where
         .into()
 }
 
+/// Map a capability state to the pill dot color + short label.
+fn status_pill(state: DeviceState) -> (Color, &'static str) {
+    match state {
+        DeviceState::Ready => (ACCENT_EMERALD, "Ready to Stream"),
+        DeviceState::NeedsSideload => (ACCENT_AMBER, "Runner Not Installed"),
+        DeviceState::DeveloperModeOff => (ACCENT_AMBER, "Developer Mode Off"),
+        DeviceState::Locked => (ACCENT_AMBER, "Locked"),
+        DeviceState::Unpaired => (ACCENT_BLUE, "Trust Required"),
+        DeviceState::Error => (ACCENT_ROSE, "Error"),
+        _ => (TEXT_MUTED, "Checking..."),
+    }
+}
+
 fn view_device_card<'a, Message>(
     dev: &'a DeviceReport,
     mask_sensitive: bool,
@@ -44,15 +61,13 @@ fn view_device_card<'a, Message>(
 where
     Message: 'a + Clone,
 {
-    // Status dot color & label
-    let (dot_color, status_text) = match dev.state {
-        DeviceState::Running => (ACCENT_EMERALD, "Live Streaming"),
-        DeviceState::Starting => (ACCENT_AMBER, "Starting Services..."),
-        DeviceState::Ready => (ACCENT_EMERALD, "Ready to Stream"),
-        DeviceState::NeedsSideload => (ACCENT_AMBER, "Runner Not Installed"),
-        DeviceState::Pairing => (ACCENT_BLUE, "Trust Computer Prompt"),
-        DeviceState::Error => (ACCENT_ROSE, "Error"),
-        _ => (TEXT_MUTED, "Connected"),
+    // Status pill: a live session overrides the capability state.
+    let (dot_color, status_text) = match dev.session_phase.label() {
+        Some(label) => match dev.session_phase {
+            SessionPhase::Running => (ACCENT_EMERALD, label),
+            _ => (ACCENT_AMBER, label),
+        },
+        None => status_pill(dev.state),
     };
 
     let status_pill = container(
@@ -140,20 +155,20 @@ where
     .spacing(8)
     .align_y(Alignment::Center);
 
-    // Action Controls
-    let actions: Element<'a, Message> = match dev.state {
-        DeviceState::Running => {
+    // Action Controls — driven strictly by the session phase first, then by
+    // the combinable capability state. There is NO "Re-Sideload" button: once
+    // the runner is installed the only action is Start; uninstalling it on the
+    // device flips the card back to "Sideload Runner" in real time.
+    let actions: Element<'a, Message> = match dev.session_phase {
+        SessionPhase::Running => {
             let btn_stop = button(text("Stop Session").font(FONT_MEDIUM).size(12))
                 .padding([6, 16])
                 .on_press(on_stop(dev.udid.clone()))
                 .style(style_button_danger);
 
-            row![btn_stop]
-                .spacing(8)
-                .align_y(Alignment::Center)
-                .into()
+            row![btn_stop].spacing(8).align_y(Alignment::Center).into()
         }
-        DeviceState::Starting => {
+        SessionPhase::Starting => {
             let btn_starting = button(text("Starting...").font(FONT_MEDIUM).size(12))
                 .padding([6, 16])
                 .style(style_button_secondary);
@@ -163,25 +178,22 @@ where
                 .align_y(Alignment::Center)
                 .into()
         }
-        _ => {
-            if dev.runner_installed {
-                // Runner IS installed: offer Start Session and Re-Sideload
-                let btn_start = button(text("Start Session").font(FONT_MEDIUM).size(12))
+        SessionPhase::Idle => match dev.state {
+            DeviceState::Ready | DeviceState::Error => {
+                // Ready → Start; Error → Retry Start (message explains why).
+                let label = if dev.state == DeviceState::Error {
+                    "Retry Start"
+                } else {
+                    "Start Session"
+                };
+                let btn_start = button(text(label).font(FONT_MEDIUM).size(12))
                     .padding([6, 18])
                     .on_press(on_start(dev.udid.clone()))
                     .style(style_button_primary);
 
-                let btn_re_sideload = button(text("Re-Sideload").font(FONT_MEDIUM).size(12))
-                    .padding([6, 14])
-                    .on_press(on_sideload(dev.udid.clone()))
-                    .style(style_button_secondary);
-
-                row![btn_start, btn_re_sideload]
-                    .spacing(8)
-                    .align_y(Alignment::Center)
-                    .into()
-            } else {
-                // Runner is NOT installed: only offer Sideload Runner
+                row![btn_start].spacing(8).align_y(Alignment::Center).into()
+            }
+            DeviceState::NeedsSideload => {
                 let btn_sideload = button(text("Sideload Runner").font(FONT_MEDIUM).size(12))
                     .padding([6, 20])
                     .on_press(on_sideload(dev.udid.clone()))
@@ -192,21 +204,52 @@ where
                     .align_y(Alignment::Center)
                     .into()
             }
-        }
+            DeviceState::DeveloperModeOff | DeviceState::Locked | DeviceState::Unpaired => {
+                // Actionable path shown as a disabled control; the message below
+                // tells the user exactly what to do.
+                let btn_disabled = button(text("Start Session").font(FONT_MEDIUM).size(12))
+                    .padding([6, 18])
+                    .style(style_button_secondary);
+
+                row![btn_disabled]
+                    .spacing(8)
+                    .align_y(Alignment::Center)
+                    .into()
+            }
+            _ => {
+                // Still diagnosing (Connected) — nothing to offer yet.
+                Space::new().into()
+            }
+        },
     };
 
-    container(
-        column![
-            header,
-            Space::new().height(10),
-            ports_row,
-            Space::new().height(12),
-            row![Space::new().width(Length::Fill), actions],
-        ]
-        .padding(16)
-    )
-    .style(style_card)
-    .into()
+    let message = if dev.status_message.is_empty() {
+        None
+    } else {
+        Some(
+            container(
+                text(&dev.status_message)
+                    .font(FONT_REGULAR)
+                    .size(11)
+                    .color(TEXT_MUTED),
+            )
+            .width(Length::Fill)
+            .padding([6, 10])
+            .style(style_pill_badge),
+        )
+    };
+
+    let mut card_children = column![header, Space::new().height(10), ports_row];
+    if let Some(m) = message {
+        card_children = card_children.push(Space::new().height(8)).push(m);
+    }
+    card_children = card_children
+        .push(Space::new().height(12))
+        .push(row![Space::new().width(Length::Fill), actions]);
+
+    container(card_children.padding(16))
+        .style(style_card)
+        .into()
 }
 
 fn view_empty_state<'a, Message: 'a>() -> Element<'a, Message> {

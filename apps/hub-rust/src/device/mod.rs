@@ -7,5 +7,6 @@ pub mod actions;
 pub mod ddi;
 pub mod touch;
 pub mod keyboard;
+pub mod health;
 
 

@@ -1,8 +1,10 @@
-//! Pure Rust sideloading: authenticate with the Apple ID, retrieve/create a
-//! development certificate, sign the unsigned IPA, and install it over USB —
-//! no Python or external `zsign` dependency.
+//! Pure Rust sideloading: fetch the latest runner IPA from the Meridian VPS,
+//! authenticate with the Apple ID, retrieve/create a development certificate,
+//! sign the IPA, and install it over USB — no local file picker, no Python, no
+//! external `zsign` dependency.
 //!
-//! 2FA is handled by prompting the UI through a global channel.
+//! 2FA is handled by prompting the UI through a global channel; progress is
+//! streamed to the UI through a second global channel.
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -20,6 +22,8 @@ use isideload::auth::apple_account::{
 use isideload::dev::developer_session::DeveloperSession;
 use isideload::sideload::builder::{MaxCertsBehavior, SideloaderBuilder};
 use isideload::util::fs_storage::FsStorage;
+
+use super::runner_ipa;
 
 /// A pending 2FA request: a hint to display plus a slot the UI fills with the
 /// user's 6-digit code. `Arc<Mutex<>>` so it is cheaply `Clone`-able into a
@@ -46,10 +50,35 @@ pub async fn next_two_factor_prompt() -> Option<TwoFactorPrompt> {
     guard.as_mut()?.recv().await
 }
 
+/// A progress update: normalized 0.0..=1.0 plus a human-readable status.
+pub type SideloadProgressUpdate = (f32, String);
+
+static PROGRESS_TX: OnceLock<mpsc::UnboundedSender<SideloadProgressUpdate>> = OnceLock::new();
+static PROGRESS_RX: OnceLock<tokio::sync::Mutex<Option<mpsc::UnboundedReceiver<SideloadProgressUpdate>>>> =
+    OnceLock::new();
+
+/// Sender the sideload task uses to stream progress to the UI.
+pub fn sideload_progress_tx() -> &'static mpsc::UnboundedSender<SideloadProgressUpdate> {
+    PROGRESS_TX.get_or_init(|| {
+        let (tx, rx) = mpsc::unbounded_channel();
+        PROGRESS_RX.get_or_init(|| tokio::sync::Mutex::new(Some(rx)));
+        tx
+    })
+}
+
+/// Await the next progress update (for the UI subscription to drain).
+pub async fn next_sideload_progress() -> Option<SideloadProgressUpdate> {
+    let rx = PROGRESS_RX.get()?;
+    let mut guard = rx.lock().await;
+    guard.as_mut()?.recv().await
+}
+
 #[derive(Debug, Clone)]
 pub struct SideloadOptions {
-    pub ipa_path: PathBuf,
+    /// Apple ID email. Saved to the vault on success and reused afterwards.
     pub apple_id: String,
+    /// Password / app-specific password. May be empty when a valid password is
+    /// already stored in the vault (the caller resolves the fallback).
     pub password: String,
     pub anisette_url: String,
     pub udid: String,
@@ -59,25 +88,13 @@ pub struct SideloadOptions {
 pub struct Sideloader;
 
 impl Sideloader {
-    /// Open native OS file dialog to select an IPA file.
-    pub async fn pick_ipa_file() -> Option<PathBuf> {
-        let file = rfd::AsyncFileDialog::new()
-            .set_title("Select MeridianRunner IPA")
-            .add_filter("iOS App Package (*.ipa)", &["ipa"])
-            .pick_file()
-            .await;
-
-        file.map(|f| f.path().to_path_buf())
-    }
-
-    /// Authenticate, sign and install the IPA in pure Rust.
+    /// Fetch the latest runner IPA from the VPS, authenticate, sign and install it.
     pub async fn execute_sideload(
         opts: SideloadOptions,
         progress_callback: impl Fn(f32, &str) + Send + Sync + 'static,
     ) -> anyhow::Result<()> {
-        if !opts.ipa_path.exists() {
-            anyhow::bail!("Selected IPA file does not exist: {:?}", opts.ipa_path);
-        }
+        // --- 1. Latest unsigned IPA from the VPS (no local file picker) ---
+        let ipa_path = runner_ipa::fetch_or_update(|p, s| progress_callback(p, s)).await?;
 
         // --- persistent storage for anisette state, certs and profiles ---
         let storage_root = dirs::data_local_dir()
@@ -86,7 +103,7 @@ impl Sideloader {
             .join("isideload");
         let sideloader_storage = FsStorage::new(storage_root.join("sideloader"));
 
-        progress_callback(0.03, "Authenticating with Apple ID...");
+        progress_callback(0.5, "Authenticating with Apple ID...");
 
         // --- anisette provider (seasons omnisette-server, GET / headers) ---
         let anisette = RemoteAnisetteProvider::new(&opts.anisette_url)
@@ -139,7 +156,7 @@ impl Sideloader {
             .storage(Box::new(sideloader_storage))
             .build();
 
-        progress_callback(0.15, "Provisioning certificate & profile...");
+        progress_callback(0.55, "Provisioning certificate & profile...");
 
         let provider = UsbmuxdProvider {
             addr: UsbmuxdAddr::default(),
@@ -154,12 +171,12 @@ impl Sideloader {
         let isideload_progress = move |pct: f32| {
             let cb = cb_progress.clone();
             async move {
-                cb(0.15 + pct * 0.60, "Signing application...");
+                cb(0.55 + pct * 0.44, "Signing application...");
             }
         };
 
         sideloader
-            .install_app(&provider, opts.ipa_path.clone(), false, Some(isideload_progress))
+            .install_app(&provider, ipa_path, false, Some(isideload_progress))
             .await
             .map_err(|e| anyhow::anyhow!("sideload failed: {e:#}"))?;
 

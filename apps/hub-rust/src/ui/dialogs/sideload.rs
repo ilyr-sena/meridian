@@ -1,6 +1,9 @@
-//! Sideload Modal Dialog: clean UI with native file picker and progress indicator.
+//! Sideload Modal Dialog: clean UI with VPS runner source and progress indicator.
+//!
+//! No local file picker — the IPA always comes from the Meridian VPS
+//! (`https://meridianhub.cc/runner`). Credentials saved in the vault are
+//! auto-reused when the password field is left blank.
 
-use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use iced::{
     alignment,
@@ -13,7 +16,6 @@ use crate::ui::theme::*;
 pub struct SideloadDialogState {
     pub is_open: bool,
     pub udid: String,
-    pub ipa_path: Option<PathBuf>,
     pub apple_id: String,
     pub password: String,
     pub two_factor_code: String,
@@ -26,7 +28,6 @@ pub struct SideloadDialogState {
 
 pub fn view_sideload_modal<'a, Message>(
     state: &'a SideloadDialogState,
-    on_browse_file: Message,
     on_apple_id_change: impl Fn(String) -> Message + 'a + Copy,
     on_password_change: impl Fn(String) -> Message + 'a + Copy,
     on_two_factor_change: impl Fn(String) -> Message + 'a + Copy,
@@ -41,18 +42,11 @@ where
         return Space::new().into();
     }
 
-    let ipa_label = state
-        .ipa_path
-        .as_ref()
-        .and_then(|p| p.file_name())
-        .map(|f| f.to_string_lossy().to_string())
-        .unwrap_or_else(|| "MeridianRunner-unsigned.ipa".to_string());
-
-    let file_row = row![
+    let runner_source_row = row![
         container(
-            text(ipa_label)
+            text("MeridianRunner • latest from VPS (meridianhub.cc)")
                 .font(FONT_MONO)
-                .size(12)
+                .size(11)
                 .color(TEXT_PRIMARY)
         )
         .padding([8, 12])
@@ -66,10 +60,6 @@ where
             },
             ..Default::default()
         }),
-        button(text("Browse...").font(FONT_MEDIUM).size(12))
-            .padding([8, 14])
-            .on_press(on_browse_file)
-            .style(style_button_secondary),
     ]
     .spacing(8)
     .align_y(Alignment::Center);
@@ -139,9 +129,9 @@ where
                 .size(11)
                 .color(TEXT_MUTED),
             Space::new().height(16),
-            text("App Package (.ipa):").font(FONT_REGULAR).size(12).color(TEXT_SECONDARY),
+            text("Runner Package (auto-fetched):").font(FONT_REGULAR).size(12).color(TEXT_SECONDARY),
             Space::new().height(4),
-            file_row,
+            runner_source_row,
             Space::new().height(12),
             text("Apple ID:").font(FONT_REGULAR).size(12).color(TEXT_SECONDARY),
             Space::new().height(4),
@@ -153,7 +143,7 @@ where
             Space::new().height(12),
             text("Password / App-Specific Password:").font(FONT_REGULAR).size(12).color(TEXT_SECONDARY),
             Space::new().height(4),
-            text_input("••••••••••••", &state.password)
+            text_input("Leave blank to reuse the saved password", &state.password)
                 .on_input(on_password_change)
                 .padding(8)
                 .size(12)

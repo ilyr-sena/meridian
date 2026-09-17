@@ -121,6 +121,10 @@ where
     );
 
     for d in devices {
+        let state_label = match d.session_phase.label() {
+            Some(l) => l,
+            None => d.state.label(),
+        };
         table_rows.push(
             container(
                 row![
@@ -129,7 +133,7 @@ where
                     text(format!(":{}", d.ports.wda)).font(FONT_MONO).size(12).color(ACCENT_BLUE).width(80),
                     text(format!(":{}", d.ports.stream)).font(FONT_MONO).size(12).color(ACCENT_EMERALD).width(80),
                     text(format!(":{}", d.ports.bridge)).font(FONT_MONO).size(12).color(TEXT_SECONDARY).width(80),
-                    text(d.state.label()).font(FONT_REGULAR).size(12).color(TEXT_SECONDARY).width(100),
+                    text(state_label).font(FONT_REGULAR).size(12).color(TEXT_SECONDARY).width(100),
                 ]
                 .align_y(Alignment::Center)
                 .padding([6, 8])

@@ -106,9 +106,9 @@ impl Vault {
         let nonce = Nonce::from_slice(&nonce_bytes);
 
         let json = serde_json::to_vec(data)?;
-        let ciphertext = cipher.decrypt(nonce, &json[..]).unwrap_or_else(|_| {
-            cipher.encrypt(nonce, &json[..]).expect("encrypt")
-        });
+        let ciphertext = cipher
+            .encrypt(nonce, &json[..])
+            .expect("AES-256-GCM encryption cannot fail");
 
         let mut output = Vec::with_capacity(SALT_SIZE + NONCE_SIZE + ciphertext.len());
         output.extend_from_slice(&salt);

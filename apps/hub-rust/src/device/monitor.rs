@@ -8,6 +8,7 @@ use tokio::sync::mpsc;
 use tracing::{info, warn};
 
 use crate::core::slots::SlotManager;
+use crate::device::health::{health_state, os_major, probe_health, status_message};
 use crate::device::lockdown::query_lockdown;
 use crate::device::models::{DeviceReport, DeviceState};
 use crate::device::tunnel::connect_usbmuxd;
@@ -110,24 +111,29 @@ impl DeviceMonitor {
                                             report_for_enrich.build_version = info.build_version;
                                             report_for_enrich.serial_number = info.serial_number;
 
-                                            // Check if MeridianRunner app is installed
-                                            let is_installed = crate::device::lockdown::check_runner_installed(&udid, device_id).await;
-                                            report_for_enrich.runner_installed = is_installed;
-                                            if is_installed {
-                                                report_for_enrich.state = DeviceState::Ready;
-                                                report_for_enrich.status_message = format!("Ready (Slot {})", ports.slot);
-                                                info!("✓ Enriched device: {} ({}) — Runner INSTALLED", report_for_enrich.name, report_for_enrich.model);
-                                            } else {
-                                                report_for_enrich.state = DeviceState::NeedsSideload;
-                                                report_for_enrich.status_message = "Runner not installed".to_string();
-                                                info!("✓ Enriched device: {} ({}) — Runner NOT installed", report_for_enrich.name, report_for_enrich.model);
-                                            }
+                                            // Full combinable health probe (installed,
+                                            // developer mode, locked, paired). The
+                                            // periodic poller keeps this fresh.
+                                            let maj = os_major(&report_for_enrich.os_version);
+                                            let health = probe_health(&udid, device_id, maj).await;
+                                            report_for_enrich.health = health;
+                                            report_for_enrich.state = health_state(&health);
+                                            report_for_enrich.status_message =
+                                                status_message(&health);
+                                            info!(
+                                                "✓ Enriched device: {} ({}) — state: {}",
+                                                report_for_enrich.name,
+                                                report_for_enrich.model,
+                                                report_for_enrich.state.label(),
+                                            );
 
                                             let _ = tx_clone.send(DeviceEvent::Updated(report_for_enrich));
                                         }
                                         Err(e) => {
                                             warn!("Lockdown query deferred for {}: {:?}", udid, e);
                                             report_for_enrich.state = DeviceState::Connected;
+                                            report_for_enrich.status_message =
+                                                format!("Device not responding yet: {e}");
                                             let _ = tx_clone.send(DeviceEvent::Updated(report_for_enrich));
                                         }
                                     }

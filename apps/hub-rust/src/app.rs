@@ -1,7 +1,6 @@
 //! Main Iced application lifecycle and state orchestration.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -10,19 +9,23 @@ use iced::{
     window, Element, Length, Subscription, Task,
 };
 use tokio::sync::mpsc;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use crate::core::slots::SlotManager;
 use crate::core::vault::Vault;
 use crate::device::actions::WdaClient;
+use crate::device::health::{health_state, os_major, probe_health, status_message};
 use crate::device::launcher::{kill_meridian_runner, launch_meridian_runner};
-use crate::device::models::{DeviceReport, DeviceState};
+use crate::device::models::{DeviceReport, DeviceState, SessionPhase};
 use crate::device::monitor::{DeviceEvent, DeviceMonitor};
 use crate::device::tunnel::{start_tunnel, ActiveTunnel};
 use crate::remote::bridge::BridgeServer;
 use crate::remote::heartbeat::{send_offline_sync, sync_session_state, HeartbeatWorker};
 use crate::remote::mesh::{TunnelStatus, TunnelSupervisor};
-use crate::sideload::sideloader::{SideloadOptions, Sideloader, TwoFactorPrompt, next_two_factor_prompt, two_factor_tx};
+use crate::sideload::sideloader::{
+    SideloadOptions, Sideloader, TwoFactorPrompt, next_sideload_progress, next_two_factor_prompt,
+    sideload_progress_tx, two_factor_tx,
+};
 use crate::ui::dialogs::sideload::{view_sideload_modal, SideloadDialogState};
 use crate::ui::tabs::{
     devices::view_devices,
@@ -50,8 +53,6 @@ pub enum Message {
     DeviceLaunchFailed(String, String, Vec<Arc<ActiveTunnel>>),
     StopDevice(String),
     OpenSideload(String),
-    BrowseIpa,
-    IpaFileSelected(Option<PathBuf>),
     SideloadAppleIdChanged(String),
     SideloadPasswordChanged(String),
     SideloadTwoFactorCodeChanged(String),
@@ -113,7 +114,6 @@ impl MeridianApp {
         let sideload = SideloadDialogState {
             is_open: false,
             udid: String::new(),
-            ipa_path: None,
             apple_id: settings.apple_id.clone(),
             password: String::new(),
             two_factor_code: String::new(),
@@ -187,7 +187,9 @@ impl MeridianApp {
                 }
                 DeviceEvent::Updated(report) => {
                     if let Some(pos) = self.devices.iter().position(|d| d.udid == report.udid) {
-                        self.devices[pos] = report;
+                        // Merge health/capability state only — never clobber the
+                        // app-level session phase or a live session's message.
+                        self.devices[pos].apply_health(&report);
                     }
                 }
                 DeviceEvent::Detached(udid) => {
@@ -214,7 +216,7 @@ impl MeridianApp {
             Message::StartDevice(udid) => {
                 let dev_opt = self.devices.iter().find(|d| d.udid == udid).cloned();
                 if let Some(dev) = dev_opt {
-                    if !dev.runner_installed {
+                    if !dev.runner_installed() {
                         self.add_log(LogLevel::Warn, "Cannot start session: MeridianRunner is not installed on this device. Please sideload first.".to_string());
                         if let Some(d) = self.devices.iter_mut().find(|d| d.udid == udid) {
                             d.state = DeviceState::NeedsSideload;
@@ -224,7 +226,7 @@ impl MeridianApp {
                     }
 
                     if let Some(d) = self.devices.iter_mut().find(|d| d.udid == udid) {
-                        d.state = DeviceState::Starting;
+                        d.session_phase = SessionPhase::Starting;
                         d.status_message = "Binding tunnels and launching runner...".to_string();
                     }
                     let ports = dev.ports;
@@ -256,7 +258,8 @@ impl MeridianApp {
             Message::DeviceStarted(udid, tunnels) => {
                 self.active_tunnels.insert(udid.clone(), tunnels);
                 if let Some(dev) = self.devices.iter_mut().find(|d| d.udid == udid) {
-                    dev.state = DeviceState::Running;
+                    dev.session_phase = SessionPhase::Running;
+                    dev.state = DeviceState::Ready;
                     dev.status_message = format!("Live Streaming on :{}", dev.ports.stream);
                     let ports = dev.ports;
                     let device_id = dev.device_id;
@@ -282,6 +285,7 @@ impl MeridianApp {
             }
             Message::DeviceLaunchFailed(udid, err, _tunnels) => {
                 if let Some(dev) = self.devices.iter_mut().find(|d| d.udid == udid) {
+                    dev.session_phase = SessionPhase::Idle;
                     dev.state = DeviceState::Error;
                     dev.status_message = err.clone();
                 }
@@ -304,8 +308,8 @@ impl MeridianApp {
                     w.store(false, Ordering::SeqCst);
                 }
                 if let Some(dev) = self.devices.iter_mut().find(|d| d.udid == udid) {
-                    dev.state = DeviceState::Ready;
-                    dev.status_message = "Ready".to_string();
+                    dev.session_phase = SessionPhase::Idle;
+                    dev.status_message = "Stopped".to_string();
                 }
                 let dev_id = self.devices.iter().find(|d| d.udid == udid).map(|d| d.device_id).unwrap_or(0);
                 let udid_clone = udid.clone();
@@ -325,16 +329,11 @@ impl MeridianApp {
                 self.sideload.progress = 0.0;
                 self.sideload.is_busy = false;
                 self.sideload.status_message.clear();
-            }
-            Message::BrowseIpa => {
-                return Task::perform(async {
-                    Sideloader::pick_ipa_file().await
-                }, Message::IpaFileSelected);
-            }
-            Message::IpaFileSelected(path) => {
-                if let Some(p) = path {
-                    self.sideload.ipa_path = Some(p);
-                }
+                self.sideload.two_factor_hint = None;
+                self.sideload.two_factor_slot = None;
+                self.sideload.password.clear();
+                // Prefill with the vault/settings Apple ID (auto-managed).
+                self.sideload.apple_id = self.settings.apple_id.clone();
             }
             Message::SideloadAppleIdChanged(id) => {
                 self.sideload.apple_id = id;
@@ -358,20 +357,40 @@ impl MeridianApp {
                 self.sideload.two_factor_hint = None;
             }
             Message::SubmitSideload => {
+                // Resolve credentials: reuse the vault-stored password when the
+                // field was left blank; never re-prompt when it isn't needed.
+                let apple_id = self.sideload.apple_id.trim().to_string();
+                if apple_id.is_empty() {
+                    self.sideload.status_message = "Enter your Apple ID to continue.".to_string();
+                    return Task::none();
+                }
+                let password = if self.sideload.password.is_empty() {
+                    self.vault.load().password.unwrap_or_default()
+                } else {
+                    self.sideload.password.clone()
+                };
+                if password.is_empty() {
+                    self.sideload.status_message =
+                        "Enter your Apple ID password (or app-specific password).".to_string();
+                    return Task::none();
+                }
+
                 self.sideload.is_busy = true;
-                self.sideload.status_message = "Starting sideload...".to_string();
+                self.sideload.progress = 0.0;
+                self.sideload.status_message = "Fetching latest Runner from VPS...".to_string();
                 let opts = SideloadOptions {
-                    ipa_path: self.sideload.ipa_path.clone().unwrap_or_else(|| PathBuf::from("runner/prebuilt/MeridianRunner-unsigned.ipa")),
-                    apple_id: self.sideload.apple_id.clone(),
-                    password: self.sideload.password.clone(),
+                    apple_id: apple_id.clone(),
+                    password,
                     anisette_url: self.settings.anisette_url.clone(),
                     udid: self.sideload.udid.clone(),
                     device_id: 1,
                 };
+                self.settings.apple_id = apple_id;
 
                 return Task::perform(async move {
                     Sideloader::execute_sideload(opts, |p, s| {
                         info!("[sideload] {:.0}% {s}", p * 100.0);
+                        let _ = sideload_progress_tx().send((p, s.to_string()));
                     })
                     .await
                     .map_err(|e| e.to_string())
@@ -385,13 +404,31 @@ impl MeridianApp {
                 self.sideload.is_busy = false;
                 match res {
                     Ok(_) => {
+                        // Persist the freshly-authenticated credentials so the
+                        // same login is reused automatically on both platforms.
+                        if !self.sideload.apple_id.is_empty() {
+                            let mut data = self.vault.load();
+                            data.apple_id = Some(self.sideload.apple_id.clone());
+                            if !self.sideload.password.is_empty() {
+                                data.password = Some(self.sideload.password.clone());
+                            }
+                            data.anisette_url = Some(self.settings.anisette_url.clone());
+                            if let Err(e) = self.vault.save(&data) {
+                                warn!("Failed to persist credentials to vault: {e}");
+                            } else {
+                                info!("✓ Apple credentials saved to secure local vault");
+                            }
+                            self.settings.apple_id = self.sideload.apple_id.clone();
+                        }
+
                         self.sideload.status_message = "Installation succeeded!".to_string();
                         self.sideload.is_open = false;
+                        self.sideload.password.clear();
                         self.add_log(LogLevel::Info, format!("Sideload successful for {}", self.sideload.udid));
                         if let Some(dev) = self.devices.iter_mut().find(|d| d.udid == self.sideload.udid) {
-                            dev.runner_installed = true;
-                            dev.state = DeviceState::Ready;
-                            dev.status_message = format!("Ready (Slot {})", dev.ports.slot);
+                            dev.health.runner_installed = crate::device::models::TriState::Yes;
+                            dev.state = health_state(&dev.health);
+                            dev.status_message = "Sideload succeeded. Detecting device state...".to_string();
                         }
                     }
                     Err(e) => {
@@ -471,7 +508,8 @@ impl MeridianApp {
         let timer = iced::time::every(Duration::from_secs(1)).map(|_| Message::Tick);
         let monitor_sub = Subscription::run(monitor_subscription);
         let two_factor_sub = Subscription::run(two_factor_subscription);
-        Subscription::batch(vec![timer, monitor_sub, two_factor_sub])
+        let progress_sub = Subscription::run(sideload_progress_subscription);
+        Subscription::batch(vec![timer, monitor_sub, two_factor_sub, progress_sub])
     }
 
     pub fn view(&self) -> Element<'_, Message> {
@@ -551,7 +589,6 @@ impl MeridianApp {
         if self.sideload.is_open {
             let modal = view_sideload_modal(
                 &self.sideload,
-                Message::BrowseIpa,
                 Message::SideloadAppleIdChanged,
                 Message::SideloadPasswordChanged,
                 Message::SideloadTwoFactorCodeChanged,
@@ -587,13 +624,109 @@ fn monitor_subscription() -> impl iced::futures::Stream<Item = Message> {
     iced::stream::channel(100, |mut output: iced::futures::channel::mpsc::Sender<Message>| async move {
         let (tx, mut rx) = mpsc::unbounded_channel();
         let slot_mgr = SlotManager::new();
-        let monitor = DeviceMonitor::new(slot_mgr, tx);
+        let monitor = DeviceMonitor::new(slot_mgr, tx.clone());
         monitor.start();
 
+        // Shared view of attached devices: udid -> last known report.
+        let devices: Arc<std::sync::Mutex<HashMap<String, DeviceReport>>> = Arc::default();
+        // Debounce state: candidate reports waiting for a second stable read.
+        let pending: Arc<std::sync::Mutex<HashMap<String, DeviceReport>>> = Arc::default();
+
+        // Real-time health poller: re-probes every 3s and emits an Updated
+        // event only once a change is confirmed stable (twice in a row), so the
+        // UI reflects install/uninstall, Developer Mode and lock state changes
+        // automatically — with zero flicker.
+        {
+            let devices = devices.clone();
+            let pending = pending.clone();
+            let tx = tx.clone();
+            tokio::spawn(async move {
+                loop {
+                    tokio::time::sleep(Duration::from_secs(3)).await;
+                    let snapshots: Vec<DeviceReport> = {
+                        devices.lock().unwrap().values().cloned().collect()
+                    };
+                    for rep in snapshots {
+                        let candidate = poll_once(&rep).await;
+                        let key = candidate.udid.clone();
+                        let mut dev_map = devices.lock().unwrap();
+                        let mut pend_map = pending.lock().unwrap();
+                        match pend_map.get(&key) {
+                            Some(prev)
+                                if *prev == candidate && dev_map.get(&key) != Some(&candidate) =>
+                            {
+                                // Confirmed stable change — emit it.
+                                if let Some(cur) = dev_map.get_mut(&key) {
+                                    *cur = candidate.clone();
+                                }
+                                pend_map.remove(&key);
+                                debug!("[HEALTH] {} → {}", key, candidate.state.label());
+                                let _ = tx.send(DeviceEvent::Updated(candidate));
+                            }
+                            Some(_) => {
+                                // Still conflicting; wait for a stable read.
+                            }
+                            None => {
+                                if dev_map.get(&key) != Some(&candidate) {
+                                    pend_map.insert(key, candidate);
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+        }
+
         while let Some(evt) = rx.recv().await {
+            match &evt {
+                DeviceEvent::Attached(r) => {
+                    devices.lock().unwrap().insert(r.udid.clone(), r.clone());
+                }
+                DeviceEvent::Updated(r) => {
+                    devices.lock().unwrap().insert(r.udid.clone(), r.clone());
+                }
+                DeviceEvent::Detached(udid) => {
+                    devices.lock().unwrap().remove(udid);
+                    pending.lock().unwrap().remove(udid);
+                }
+            }
             let _ = output.send(Message::DeviceEvent(evt)).await;
         }
     })
+}
+
+/// One health probe pass over a device snapshot, honoring the session guard:
+/// while a session is Starting/Running it is only downgraded on *hard* health
+/// evidence (device locked, runner uninstalled, or Developer Mode explicitly
+/// off); transient probe blips can never kill a live session's UI.
+async fn poll_once(rep: &DeviceReport) -> DeviceReport {
+    let mut candidate = rep.clone();
+    let health = probe_health(&rep.udid, rep.device_id, os_major(&rep.os_version)).await;
+    let derived = health_state(&health);
+
+    let state = if matches!(
+        rep.session_phase,
+        SessionPhase::Starting | SessionPhase::Running
+    ) {
+        if health.locked.is_yes() {
+            DeviceState::Locked
+        } else if health.runner_installed.is_no() {
+            DeviceState::NeedsSideload
+        } else if health.developer_mode.is_no() {
+            DeviceState::DeveloperModeOff
+        } else {
+            rep.state
+        }
+    } else {
+        derived
+    };
+
+    candidate.health = health;
+    candidate.state = state;
+    if rep.session_phase == SessionPhase::Idle {
+        candidate.status_message = status_message(&health);
+    }
+    candidate
 }
 
 /// Perpetual-availability watchdog: probes the on-device runner's HTTP server and,
@@ -646,6 +779,23 @@ fn two_factor_subscription() -> impl iced::futures::Stream<Item = Message> {
             loop {
                 if let Some(prompt) = next_two_factor_prompt().await {
                     let _ = output.send(Message::SideloadTwoFactor(prompt)).await;
+                }
+            }
+        },
+    )
+}
+
+/// Stream live sideload progress (fetch → sign → install) into the modal's
+/// progress bar.
+fn sideload_progress_subscription() -> impl iced::futures::Stream<Item = Message> {
+    use iced::futures::SinkExt;
+    iced::stream::channel(
+        1,
+        |mut output: iced::futures::channel::mpsc::Sender<Message>| async move {
+            let _ = sideload_progress_tx();
+            loop {
+                if let Some((p, s)) = next_sideload_progress().await {
+                    let _ = output.send(Message::SideloadProgress(p, s)).await;
                 }
             }
         },
