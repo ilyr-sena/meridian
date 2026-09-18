@@ -38,6 +38,7 @@ export async function POST(req: NextRequest) {
         last_heartbeat: now,
         udid, // sync actual UDID if matched by name
       }
+      if (name) updateDoc.name = name
       if (model) updateDoc.model = model
       if (version) updateDoc.version = version
       if (tailscale_ip) updateDoc.tailscale_ip = tailscale_ip
