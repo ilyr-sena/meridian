@@ -378,12 +378,13 @@ impl MeridianApp {
                 self.sideload.is_busy = true;
                 self.sideload.progress = 0.0;
                 self.sideload.status_message = "Fetching latest Runner from VPS...".to_string();
+                let device_id = self.devices.iter().find(|d| d.udid == self.sideload.udid).map(|d| d.device_id).unwrap_or(0);
                 let opts = SideloadOptions {
                     apple_id: apple_id.clone(),
                     password,
                     anisette_url: self.settings.anisette_url.clone(),
                     udid: self.sideload.udid.clone(),
-                    device_id: 1,
+                    device_id,
                 };
                 self.settings.apple_id = apple_id;
 
