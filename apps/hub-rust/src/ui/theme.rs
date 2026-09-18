@@ -23,6 +23,7 @@ pub const TEXT_MUTED: Color = Color::from_rgb(0.38, 0.39, 0.44);          // #61
 
 pub const ACCENT_EMERALD: Color = Color::from_rgb(0.063, 0.725, 0.506);    // #10B981
 pub const ACCENT_BLUE: Color = Color::from_rgb(0.231, 0.51, 0.965);       // #3B82F6
+pub const ACCENT_INDIGO: Color = Color::from_rgb(0.322, 0.399, 0.906);    // #5266E7
 pub const ACCENT_ROSE: Color = Color::from_rgb(0.937, 0.267, 0.267);       // #EF4444
 pub const ACCENT_AMBER: Color = Color::from_rgb(0.96, 0.62, 0.04);        // #F59E0B
 
@@ -80,19 +81,19 @@ pub fn style_pill_badge(_theme: &iced::Theme) -> container::Style {
 // Button Styles (Full Pill)
 pub fn style_button_primary(_theme: &iced::Theme, status: button::Status) -> button::Style {
     let base_bg = match status {
-        button::Status::Hovered => Color::from_rgb(0.1, 0.8, 0.58),
-        button::Status::Pressed => Color::from_rgb(0.05, 0.65, 0.45),
-        _ => ACCENT_EMERALD,
+        button::Status::Hovered => Color::from_rgb(0.38, 0.46, 0.94),
+        button::Status::Pressed => Color::from_rgb(0.28, 0.35, 0.85),
+        _ => ACCENT_INDIGO,
     };
     button::Style {
         background: Some(base_bg.into()),
-        text_color: Color::from_rgb(0.02, 0.1, 0.06),
+        text_color: Color::from_rgb(0.96, 0.96, 0.98),
         border: Border {
             radius: border::Radius::from(9999.0),
             ..Default::default()
         },
         shadow: Shadow {
-            color: Color::from_rgba(0.063, 0.725, 0.506, 0.25),
+            color: Color::from_rgba(0.322, 0.399, 0.906, 0.25),
             offset: Vector::new(0.0, 2.0),
             blur_radius: 8.0,
         },

@@ -2,13 +2,14 @@
 
 use iced::{
     alignment,
-    widget::{button, container, row, text, Space},
+    widget::{button, container, row, text, MouseArea, Space},
     Alignment, Element, Length,
 };
 use crate::ui::theme::*;
 
 #[derive(Debug, Clone)]
 pub enum TitleBarAction {
+    Drag,
     Minimize,
     Maximize,
     Close,
@@ -126,12 +127,21 @@ where
         .spacing(6)
         .align_y(Alignment::Center);
 
+    // Draggable area: everything except window controls
+    let draggable_content = row![
+        title_badge,
+        Space::new().width(16),
+        tunnel_indicator,
+        Space::new().width(Length::Fill),
+    ]
+    .align_y(Alignment::Center);
+
+    let drag_area = MouseArea::new(draggable_content)
+        .on_press(on_action(TitleBarAction::Drag));
+
     container(
         row![
-            title_badge,
-            Space::new().width(16),
-            tunnel_indicator,
-            Space::new().width(Length::Fill),
+            drag_area,
             controls,
         ]
         .align_y(Alignment::Center)

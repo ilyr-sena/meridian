@@ -489,6 +489,9 @@ impl MeridianApp {
                 self.tunnel_status = status;
             }
             Message::TitleAction(action) => match action {
+                TitleBarAction::Drag => {
+                    return window::latest().and_then(|id| window::drag(id));
+                }
                 TitleBarAction::Minimize => {
                     return window::latest().and_then(|id| window::minimize(id, true));
                 }
