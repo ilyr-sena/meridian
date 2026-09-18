@@ -55,51 +55,67 @@ pub async fn query_lockdown(device_id: u32, _udid: &str) -> anyhow::Result<Lockd
         }
     }
 
-    // 2. Query basic device values (GetValue query without pairing requirement)
-    let mut req = plist::Dictionary::new();
-    req.insert("Request".into(), plist::Value::String("GetValue".into()));
-    req.insert("Label".into(), plist::Value::String("meridian-hub".into()));
-    req.insert("Key".into(), plist::Value::Array(vec![
-        plist::Value::String("DeviceName".into()),
-        plist::Value::String("ProductType".into()),
-        plist::Value::String("ProductVersion".into()),
-        plist::Value::String("BuildVersion".into()),
-        plist::Value::String("SerialNumber".into()),
-    ]));
-
-    let mut req_xml = Vec::new();
-    plist::to_writer_xml(&mut req_xml, &req)?;
-
-    let msg_len = req_xml.len() as u32;
-    mux.write_all(&msg_len.to_be_bytes()).await?;
-    mux.write_all(&req_xml).await?;
-    mux.flush().await?;
-
-    // Read big-endian lockdown frame length (4 bytes)
-    let mut len_buf = [0u8; 4];
-    mux.read_exact(&mut len_buf).await?;
-    let frame_len = u32::from_be_bytes(len_buf) as usize;
-
-    let mut val_buf = vec![0u8; frame_len];
-    mux.read_exact(&mut val_buf).await?;
-
+    // 2. Query basic device values (individual GetValue queries — some keys
+    //    like DeviceName require a session while others don't, so we query
+    //    them one at a time and merge the results).
     let mut info = LockdownInfo::default();
-    if let Ok(plist::Value::Dictionary(root)) = plist::from_bytes(&val_buf) {
-        if let Some(plist::Value::Dictionary(val)) = root.get("Value") {
-            if let Some(name) = val.get("DeviceName").and_then(|v| v.as_string()) {
-                info.name = name.to_string();
-            }
-            if let Some(model) = val.get("ProductType").and_then(|v| v.as_string()) {
-                info.model = format_model(model);
-            }
-            if let Some(ver) = val.get("ProductVersion").and_then(|v| v.as_string()) {
-                info.os_version = format!("iOS {}", ver);
-            }
-            if let Some(build) = val.get("BuildVersion").and_then(|v| v.as_string()) {
-                info.build_version = build.to_string();
-            }
-            if let Some(sn) = val.get("SerialNumber").and_then(|v| v.as_string()) {
-                info.serial_number = Some(sn.to_string());
+
+    for key in &["DeviceName", "ProductType", "ProductVersion", "BuildVersion", "SerialNumber"] {
+        let mut req = plist::Dictionary::new();
+        req.insert("Request".into(), plist::Value::String("GetValue".into()));
+        req.insert("Label".into(), plist::Value::String("meridian-hub".into()));
+        req.insert("Key".into(), plist::Value::String(key.to_string()));
+
+        let mut req_xml = Vec::new();
+        plist::to_writer_xml(&mut req_xml, &req)?;
+
+        let msg_len = req_xml.len() as u32;
+        mux.write_all(&msg_len.to_be_bytes()).await?;
+        mux.write_all(&req_xml).await?;
+        mux.flush().await?;
+
+        // Read lockdown frame length (4 bytes)
+        let mut len_buf = [0u8; 4];
+        if mux.read_exact(&mut len_buf).await.is_err() {
+            break;
+        }
+        let frame_len = u32::from_be_bytes(len_buf) as usize;
+
+        let mut val_buf = vec![0u8; frame_len];
+        if mux.read_exact(&mut val_buf).await.is_err() {
+            break;
+        }
+
+        if let Ok(plist::Value::Dictionary(root)) = plist::from_bytes(&val_buf) {
+            if let Some(plist::Value::Dictionary(val)) = root.get("Value") {
+                match *key {
+                    "DeviceName" => {
+                        if let Some(v) = val.get("DeviceName").and_then(|v| v.as_string()) {
+                            info.name = v.to_string();
+                        }
+                    }
+                    "ProductType" => {
+                        if let Some(v) = val.get("ProductType").and_then(|v| v.as_string()) {
+                            info.model = format_model(v);
+                        }
+                    }
+                    "ProductVersion" => {
+                        if let Some(v) = val.get("ProductVersion").and_then(|v| v.as_string()) {
+                            info.os_version = format!("iOS {}", v);
+                        }
+                    }
+                    "BuildVersion" => {
+                        if let Some(v) = val.get("BuildVersion").and_then(|v| v.as_string()) {
+                            info.build_version = v.to_string();
+                        }
+                    }
+                    "SerialNumber" => {
+                        if let Some(v) = val.get("SerialNumber").and_then(|v| v.as_string()) {
+                            info.serial_number = Some(v.to_string());
+                        }
+                    }
+                    _ => {}
+                }
             }
         }
     }
