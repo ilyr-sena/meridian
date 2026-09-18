@@ -191,6 +191,11 @@ impl MeridianApp {
                         // app-level session phase or a live session's message.
                         self.devices[pos].apply_health(&report);
                     }
+                    // Propagate enriched metadata (name/model/version) to the
+                    // cloud heartbeat worker so the next beat sends real values.
+                    if let Some(hb) = self.active_heartbeats.get(&report.udid) {
+                        hb.update_report(&report);
+                    }
                 }
                 DeviceEvent::Detached(udid) => {
                     info!("Device detached in UI: {}", udid);

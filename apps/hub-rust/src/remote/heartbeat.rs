@@ -1,7 +1,7 @@
 //! Device presence and heartbeat sync worker with Meridian cloud API.
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use std::time::Duration;
 use serde_json::json;
 use tracing::{debug, info};
@@ -15,6 +15,7 @@ pub const DEFAULT_API_URL: &str = "https://meridianhub.cc";
 pub struct HeartbeatWorker {
     should_run: Arc<AtomicBool>,
     session_active: Arc<AtomicBool>,
+    report: Arc<RwLock<DeviceReport>>,
 }
 
 impl HeartbeatWorker {
@@ -26,22 +27,29 @@ impl HeartbeatWorker {
         let should_run = Arc::new(AtomicBool::new(true));
         let flag = should_run.clone();
         let is_session_active = session_active.clone();
+        let shared_report = Arc::new(RwLock::new(report));
 
         let base_url = api_url.unwrap_or_else(|| DEFAULT_API_URL.to_string());
         let endpoint = format!("{}/api/devices/heartbeat", base_url.trim_end_matches('/'));
 
+        let hb_report = shared_report.clone();
         tokio::spawn(async move {
             let client = reqwest::Client::builder()
                 .timeout(Duration::from_secs(5))
                 .build()
                 .unwrap();
 
-            info!("Starting cloud heartbeat for device {} -> {}", report.udid, endpoint);
+            info!("Starting cloud heartbeat for device -> {}", endpoint);
 
             while flag.load(Ordering::SeqCst) {
                 let active = is_session_active.load(Ordering::SeqCst);
+                let (udid, name, model, os_version, build_version, slot) = {
+                    let r = hb_report.read().unwrap();
+                    (r.udid.clone(), r.name.clone(), r.model.clone(), r.os_version.clone(), r.build_version.clone(), r.ports.slot)
+                };
+
                 let host_ports = if active {
-                    let rp = RatholePorts::for_slot(report.ports.slot);
+                    let rp = RatholePorts::for_slot(slot);
                     json!({
                         "wda": rp.wda,
                         "stream": rp.stream,
@@ -52,11 +60,11 @@ impl HeartbeatWorker {
                 };
 
                 let payload = json!({
-                    "udid": report.udid,
-                    "name": report.name,
-                    "model": report.model,
-                    "version": report.os_version,
-                    "build": report.build_version,
+                    "udid": udid,
+                    "name": name,
+                    "model": model,
+                    "version": os_version,
+                    "build": build_version,
                     "host_ports": host_ports,
                     "status": "online",
                     "session_active": active,
@@ -65,13 +73,13 @@ impl HeartbeatWorker {
 
                 match client.post(&endpoint).json(&payload).send().await {
                     Ok(resp) if resp.status().is_success() => {
-                        debug!("✓ Cloud heartbeat synced for {} (active: {})", report.udid, active);
+                        debug!("✓ Cloud heartbeat synced for {} (active: {})", udid, active);
                     }
                     Ok(resp) => {
-                        debug!("Cloud heartbeat status {}: {}", report.udid, resp.status());
+                        debug!("Cloud heartbeat status {}: {}", udid, resp.status());
                     }
                     Err(e) => {
-                        debug!("Cloud heartbeat error {}: {:?}", report.udid, e);
+                        debug!("Cloud heartbeat error {}: {:?}", udid, e);
                     }
                 }
 
@@ -79,8 +87,9 @@ impl HeartbeatWorker {
             }
 
             // Send offline payload when stopped
+            let udid = { hb_report.read().unwrap().udid.clone() };
             let offline_payload = json!({
-                "udid": report.udid,
+                "udid": udid,
                 "status": "offline",
                 "host_ports": serde_json::Value::Null,
                 "end_active_session": true,
@@ -88,10 +97,16 @@ impl HeartbeatWorker {
                 "timestamp": chrono::Utc::now().to_rfc3339(),
             });
             let _ = client.post(&endpoint).json(&offline_payload).send().await;
-            info!("Sent offline heartbeat status for {}", report.udid);
+            info!("Sent offline heartbeat status for {}", udid);
         });
 
-        Self { should_run, session_active }
+        Self { should_run, session_active, report: shared_report }
+    }
+
+    pub fn update_report(&self, report: &DeviceReport) {
+        if let Ok(mut r) = self.report.write() {
+            r.apply_health(report);
+        }
     }
 
     pub fn set_session_active(&self, active: bool) {
