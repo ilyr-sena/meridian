@@ -31,7 +31,36 @@ use idevice::{
     usbmuxd::UsbmuxdAddr,
 };
 
-pub const DEFAULT_RUNNER_BUNDLE: &str = "dev.ius.meridian.runner.xctrunner.SRTHYBYH35";
+/// Discover the installed MeridianRunner bundle ID. The sideloader appends
+/// the signing team's ID to the bundle (e.g. `.SRTHYBYH35`), so the installed
+/// ID varies with the Apple ID used to sideload — never assume a fixed one.
+async fn discover_runner_bundle(udid: &str, device_id: u32) -> anyhow::Result<String> {
+    let provider = UsbmuxdProvider {
+        addr: UsbmuxdAddr::default(),
+        tag: 1,
+        udid: udid.to_string(),
+        device_id,
+        label: "meridian-hub".to_string(),
+    };
+
+    let mut install = InstallationProxyClient::connect(&provider).await?;
+    let apps = install.get_apps(Some("User"), None).await?;
+
+    // Prefer the canonical dev.ius.meridian prefix; fall back to a looser
+    // match so renamed/legacy bundles still resolve.
+    let mut loose: Option<String> = None;
+    for bid in apps.keys() {
+        let lower = bid.to_lowercase();
+        if lower.starts_with("dev.ius.meridian") {
+            return Ok(bid.clone());
+        }
+        if (lower.contains("meridian") && lower.contains("runner")) || lower.contains("xctrunner")
+        {
+            loose = Some(bid.clone());
+        }
+    }
+    loose.ok_or_else(|| anyhow::anyhow!("no MeridianRunner app installed on device"))
+}
 
 /// Attempt to launch MeridianRunner on the device and verify via HTTP probe.
 pub async fn launch_meridian_runner(
@@ -53,7 +82,14 @@ async fn launch_meridian_runner_inner(
     stream_port: u16,
     bundle_id_hint: Option<String>,
 ) -> anyhow::Result<()> {
-    let target_bundle = bundle_id_hint.unwrap_or_else(|| DEFAULT_RUNNER_BUNDLE.to_string());
+    let target_bundle = match bundle_id_hint {
+        Some(b) => b,
+        None => discover_runner_bundle(&udid, device_id).await.map_err(|_| {
+            anyhow::anyhow!(
+                "Runner application not installed!\nPlease sideload MeridianRunner first."
+            )
+        })?,
+    };
     info!("🚀 Launching MeridianRunner ({target_bundle}) on device {udid} (device_id: {device_id})...");
 
     // 0. Ensure the Developer Disk Image is mounted. The runner links XCTest
@@ -128,7 +164,16 @@ async fn kill_meridian_runner_inner(
     device_id: u32,
     bundle_id_hint: Option<String>,
 ) -> anyhow::Result<()> {
-    let target_bundle = bundle_id_hint.unwrap_or_else(|| DEFAULT_RUNNER_BUNDLE.to_string());
+    let target_bundle = match bundle_id_hint {
+        Some(b) => b,
+        None => match discover_runner_bundle(&udid, device_id).await {
+            Ok(b) => b,
+            Err(_) => {
+                info!("No runner app found to terminate on {udid}");
+                return Ok(());
+            }
+        },
+    };
     info!("⏹ Terminating MeridianRunner ({}) on device {}", target_bundle, udid);
     let _ = invoke_native_kill(&udid, device_id, &target_bundle).await;
     Ok(())

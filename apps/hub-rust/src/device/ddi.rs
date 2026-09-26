@@ -59,10 +59,7 @@ pub async fn ensure_developer_image_mounted(udid: &str, device_id: u32) -> anyho
         // Developer Mode must be enabled before a personalized DDI can mount.
         if let Ok(developer_mode) = developer_mode_enabled(&provider).await {
             if !developer_mode {
-                anyhow::bail!(
-                    "Developer Mode is not enabled on this device.\n\
-                     Open Settings -> Privacy & Security -> Developer Mode, enable it, and reboot."
-                );
+                enable_developer_mode(&provider).await?;
             }
         }
         mount_personalized(&provider).await
@@ -74,6 +71,45 @@ pub async fn ensure_developer_image_mounted(udid: &str, device_id: u32) -> anyho
 async fn developer_mode_enabled(provider: &UsbmuxdProvider) -> anyhow::Result<bool> {
     let mut mounter = ImageMounter::connect(provider).await?;
     Ok(mounter.query_developer_mode_status().await?)
+}
+
+/// Enable Developer Mode via the AMFI lockdown service: reveals the toggle
+/// in Settings (iOS 18+), requests the enable, and accepts the confirmation
+/// dialog so the device reboots without manual interaction.
+///
+/// Always returns an error telling the user to wait for the reboot — the
+/// personalized DDI can only mount after the device restarts and is unlocked.
+async fn enable_developer_mode(provider: &UsbmuxdProvider) -> anyhow::Result<()> {
+    use idevice::services::amfi::AmfiClient;
+
+    let mut amfi = match AmfiClient::connect(provider).await {
+        Ok(c) => c,
+        Err(e) => anyhow::bail!(
+            "Developer Mode is not enabled and the AMFI service is unavailable: {e}.\n\
+             Open Settings -> Privacy & Security -> Developer Mode, enable it, and reboot."
+        ),
+    };
+
+    // iOS 18+ hides the Developer Mode toggle until a developer host reveals
+    // it; harmless on older versions.
+    if let Err(e) = amfi.reveal_developer_mode_option_in_ui().await {
+        warn!("Could not reveal Developer Mode option in Settings: {e}");
+    }
+
+    amfi.enable_developer_mode()
+        .await
+        .map_err(|e| anyhow::anyhow!("failed to request Developer Mode enable: {e}"))?;
+
+    // Accept the on-device confirmation dialog so the reboot is scheduled
+    // without requiring manual interaction.
+    if let Err(e) = amfi.accept_developer_mode().await {
+        warn!("Could not auto-accept Developer Mode dialog: {e}");
+    }
+
+    anyhow::bail!(
+        "Developer Mode has been enabled — the iPhone is rebooting now.\n\
+         Wait for it to restart, unlock it, then start the session again."
+    )
 }
 
 fn provider(udid: &str, device_id: u32) -> UsbmuxdProvider {
