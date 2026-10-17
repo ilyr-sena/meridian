@@ -614,6 +614,11 @@ export function PhoneStage({ className }: { className?: string }) {
     }
     function handleDown(e: Event) {
       e.preventDefault();
+      // Capture the pointer so moves keep flowing to the pad even after the
+      // cursor exits the phone screen rect mid-swipe (mirrors local-pad.html).
+      // Without capture, hit-testing retargets each event and the gesture
+      // stalls at the last in-bounds coordinate.
+      el!.setPointerCapture((e as PointerEvent).pointerId);
       down = true;
       const [fx, fy] = frac(e as PointerEvent);
       startPoint = { fx, fy, time: Date.now() };
@@ -632,26 +637,39 @@ export function PhoneStage({ className }: { className?: string }) {
       send({ kind: "release", ...last });
     }
 
+    // If the window loses focus mid-gesture (alt-tab, notifications), lift the
+    // finger on the phone instead of leaving it stuck pressed down.
+    function handleBlur() {
+      if (down) {
+        down = false;
+        send({ kind: "release", ...last });
+      }
+    }
+
     el.addEventListener("pointerdown", handleDown);
     el.addEventListener("pointermove", handleMove);
     // Chromium-only, fires at full input rate — smoother drags than coalesced moves
     el.addEventListener("pointerrawupdate", handleMove);
     window.addEventListener("pointerup", handleUp);
     window.addEventListener("pointercancel", handleUp);
-    window.addEventListener("blur", () => {
-      if (down) {
-        down = false;
-        send({ kind: "release", ...last });
-      }
-    });
+    window.addEventListener("blur", handleBlur);
     return () => {
       el.removeEventListener("pointerdown", handleDown);
       el.removeEventListener("pointermove", handleMove);
       el.removeEventListener("pointerrawupdate", handleMove);
       window.removeEventListener("pointerup", handleUp);
       window.removeEventListener("pointercancel", handleUp);
+      window.removeEventListener("blur", handleBlur);
     };
-  }, [activeSession]);
+    // Rebind ONLY when the pad element actually mounts/unmounts. This must
+    // NOT depend on `activeSession`: useLiveQuery re-parses its JSON every
+    // ~2s, producing a new object identity on each poll — that tore these
+    // listeners down and re-added them with `down` reset to false
+    // mid-gesture, silently dropping moves and the release message (the
+    // phone's finger stayed pressed: the "stuck swipe" / needing a second
+    // tap). `isDeviceActive` is a boolean that is true exactly while the pad
+    // is mounted, so this runs at mount/unmount and never mid-session.
+  }, [isDeviceActive]);
 
   // Live running-state sync: while the Apps popover is open, poll the bridge.
   // Recent manual ops get a grace window so slow launches/kills don't flicker.
