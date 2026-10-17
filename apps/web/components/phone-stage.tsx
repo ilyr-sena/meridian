@@ -589,19 +589,32 @@ export function PhoneStage({ className }: { className?: string }) {
   const opsRef = useRef<
     Map<string, { state: "running" | "stopped"; ts: number }>
   >(new Map());
-  const padRef = useRef<HTMLDivElement>(null);
+  const padTeardownRef = useRef<(() => void) | null>(null);
 
   // Invisible pad over the stream: mirrors tools/hid_test.py's test page —
   // pointer events -> normalized {fx,fy} -> the bridge's gesture consumer.
-  useEffect(() => {
-    const el = padRef.current;
+  // Bound via a CALLBACK REF, never a dep-keyed effect: the pad sits inside
+  // AnimatePresence mode="wait", so it only mounts ~300ms AFTER
+  // isDeviceActive flips true (the empty-state exit animation must finish
+  // first). An effect keyed on session state runs at the flip — before the
+  // element exists — and with stable deps never re-runs: no listeners, dead
+  // pad. (The old [activeSession] dep only ever attached because the ~2s
+  // live-query polls kept re-running the effect — while also resetting
+  // gesture state mid-swipe.) React calls this callback at the element's
+  // exact mount/unmount, so binding is deterministic and churn-free.
+  const attachPad = useCallback((el: HTMLDivElement | null) => {
+    // Unmount (or remount): detach the previous binding's window-level
+    // listeners. Element-level listeners die with the element itself.
+    padTeardownRef.current?.();
+    padTeardownRef.current = null;
     if (!el) return;
+    const pad = el;
+
     let down = false;
-    let startPoint = { fx: 0.5, fy: 0.5, time: 0 };
     let last = { fx: 0.5, fy: 0.5 };
 
     function frac(e: { clientX: number; clientY: number }): [number, number] {
-      const r = el!.getBoundingClientRect();
+      const r = pad.getBoundingClientRect();
       const fx = Math.min(Math.max((e.clientX - r.left) / r.width, 0), 1);
       const fy = Math.min(Math.max((e.clientY - r.top) / r.height, 0), 1);
       return [fx, fy];
@@ -618,10 +631,9 @@ export function PhoneStage({ className }: { className?: string }) {
       // cursor exits the phone screen rect mid-swipe (mirrors local-pad.html).
       // Without capture, hit-testing retargets each event and the gesture
       // stalls at the last in-bounds coordinate.
-      el!.setPointerCapture((e as PointerEvent).pointerId);
+      pad.setPointerCapture((e as PointerEvent).pointerId);
       down = true;
       const [fx, fy] = frac(e as PointerEvent);
-      startPoint = { fx, fy, time: Date.now() };
       last = { fx, fy };
       send({ kind: "down", fx, fy });
     }
@@ -637,8 +649,8 @@ export function PhoneStage({ className }: { className?: string }) {
       send({ kind: "release", ...last });
     }
 
-    // If the window loses focus mid-gesture (alt-tab, notifications), lift the
-    // finger on the phone instead of leaving it stuck pressed down.
+    // If the window loses focus mid-gesture (alt-tab, notifications), lift
+    // the finger on the phone instead of leaving it stuck pressed down.
     function handleBlur() {
       if (down) {
         down = false;
@@ -646,30 +658,23 @@ export function PhoneStage({ className }: { className?: string }) {
       }
     }
 
-    el.addEventListener("pointerdown", handleDown);
-    el.addEventListener("pointermove", handleMove);
+    pad.addEventListener("pointerdown", handleDown);
+    pad.addEventListener("pointermove", handleMove);
     // Chromium-only, fires at full input rate — smoother drags than coalesced moves
-    el.addEventListener("pointerrawupdate", handleMove);
+    pad.addEventListener("pointerrawupdate", handleMove);
     window.addEventListener("pointerup", handleUp);
     window.addEventListener("pointercancel", handleUp);
     window.addEventListener("blur", handleBlur);
-    return () => {
-      el.removeEventListener("pointerdown", handleDown);
-      el.removeEventListener("pointermove", handleMove);
-      el.removeEventListener("pointerrawupdate", handleMove);
+
+    padTeardownRef.current = () => {
+      pad.removeEventListener("pointerdown", handleDown);
+      pad.removeEventListener("pointermove", handleMove);
+      pad.removeEventListener("pointerrawupdate", handleMove);
       window.removeEventListener("pointerup", handleUp);
       window.removeEventListener("pointercancel", handleUp);
       window.removeEventListener("blur", handleBlur);
     };
-    // Rebind ONLY when the pad element actually mounts/unmounts. This must
-    // NOT depend on `activeSession`: useLiveQuery re-parses its JSON every
-    // ~2s, producing a new object identity on each poll — that tore these
-    // listeners down and re-added them with `down` reset to false
-    // mid-gesture, silently dropping moves and the release message (the
-    // phone's finger stayed pressed: the "stuck swipe" / needing a second
-    // tap). `isDeviceActive` is a boolean that is true exactly while the pad
-    // is mounted, so this runs at mount/unmount and never mid-session.
-  }, [isDeviceActive]);
+  }, []);
 
   // Live running-state sync: while the Apps popover is open, poll the bridge.
   // Recent manual ops get a grace window so slow launches/kills don't flicker.
@@ -1149,7 +1154,7 @@ export function PhoneStage({ className }: { className?: string }) {
                 {/* Invisible gesture pad — streams normalized coords to the HID
               bridge or directly to WDA */}
                 <div
-                  ref={padRef}
+                  ref={attachPad}
                   aria-hidden
                   className="absolute inset-0 z-20 cursor-pointer touch-none select-none"
                 />
