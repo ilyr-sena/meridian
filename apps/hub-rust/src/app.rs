@@ -19,6 +19,7 @@ use crate::device::launcher::{kill_meridian_runner, launch_meridian_runner};
 use crate::device::models::{DeviceReport, DeviceState, SessionPhase};
 use crate::device::monitor::{DeviceEvent, DeviceMonitor};
 use crate::device::tunnel::{start_tunnel, ActiveTunnel};
+use crate::net::{NetEvent, NetEventKind, NetHealthMonitor, NetHealthSnapshot};
 use crate::remote::bridge::BridgeServer;
 use crate::remote::heartbeat::{send_offline_sync, sync_session_state, HeartbeatWorker};
 use crate::remote::mesh::{TunnelStatus, TunnelSupervisor};
@@ -72,7 +73,9 @@ pub enum Message {
     CopyLogs,
     AddLog(LogLevel, String),
     Tick,
-    TunnelUpdated(TunnelStatus),
+    /// Periodic status refresh: rathole tunnel state + the live internet
+    /// health snapshot + any queued network log events.
+    StatusUpdated(TunnelStatus, NetHealthSnapshot, Vec<NetEvent>),
     TitleAction(TitleBarAction),
 }
 
@@ -87,6 +90,10 @@ pub struct MeridianApp {
     vault: Vault,
     tunnel_supervisor: Arc<TunnelSupervisor>,
     tunnel_status: TunnelStatus,
+    /// Live internet connection health (latency/jitter/loss/speed) — kept
+    /// continuously fresh by the `NetHealthMonitor` background tasks.
+    net_monitor: Arc<NetHealthMonitor>,
+    net_snapshot: NetHealthSnapshot,
     logs: Vec<LogEntry>,
     log_level: LogLevel,
     log_search: String,
@@ -103,6 +110,9 @@ impl MeridianApp {
         let slot_mgr = SlotManager::new();
         let tunnel_supervisor = Arc::new(TunnelSupervisor::new(vault.clone()));
         tunnel_supervisor.start();
+
+        // Live internet health monitor (probes, stats, classifier, speed tests).
+        let net_monitor = NetHealthMonitor::start();
 
         let settings = SettingsState {
             mask_sensitive: vault_data.sensitive_data_masked,
@@ -135,6 +145,8 @@ impl MeridianApp {
             vault,
             tunnel_supervisor,
             tunnel_status: TunnelStatus::offline(),
+            net_monitor: net_monitor.clone(),
+            net_snapshot: net_monitor.snapshot(),
             logs: vec![
                 LogEntry {
                     level: LogLevel::Info,
@@ -486,13 +498,37 @@ impl MeridianApp {
             }
             Message::Tick => {
                 self.uptime_secs += 1;
+
+                // Keep the net monitor aware of live sessions so its speed
+                // tests never compete with a streaming session.
+                let session_live = self
+                    .devices
+                    .iter()
+                    .any(|d| d.session_phase == SessionPhase::Running);
+                self.net_monitor.set_session_active(session_live);
+
                 let tunnel_sup = self.tunnel_supervisor.clone();
-                return Task::perform(async move {
-                    tunnel_sup.get_status().await
-                }, Message::TunnelUpdated);
+                let net = self.net_monitor.clone();
+                return Task::perform(
+                    async move {
+                        let status = tunnel_sup.get_status().await;
+                        let (snapshot, events) = net.collect();
+                        (status, snapshot, events)
+                    },
+                    |(status, snapshot, events)| Message::StatusUpdated(status, snapshot, events),
+                );
             }
-            Message::TunnelUpdated(status) => {
+            Message::StatusUpdated(status, snapshot, events) => {
                 self.tunnel_status = status;
+                self.net_snapshot = snapshot;
+                for event in events {
+                    let level = match event.kind {
+                        NetEventKind::Info => LogLevel::Info,
+                        NetEventKind::Warning => LogLevel::Warn,
+                        NetEventKind::Critical => LogLevel::Error,
+                    };
+                    self.add_log(level, event.message);
+                }
             }
             Message::TitleAction(action) => match action {
                 TitleBarAction::Drag => {
@@ -524,7 +560,9 @@ impl MeridianApp {
     pub fn view(&self) -> Element<'_, Message> {
         let titlebar = view_titlebar(
             self.tunnel_status.is_running,
-            self.tunnel_status.latency_ms,
+            // Live internet RTT (best anchor, EWMA-smoothed) — real data from
+            // the net monitor, refreshed every tick.
+            self.net_snapshot.current_latency_ms.unwrap_or(0),
             Message::TitleAction,
         );
 
@@ -557,6 +595,7 @@ impl MeridianApp {
             ),
             Tab::Status => view_status(
                 &self.tunnel_status,
+                &self.net_snapshot,
                 &self.devices,
                 self.uptime_secs,
                 self.settings.mask_sensitive,

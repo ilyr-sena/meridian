@@ -9,6 +9,7 @@
 mod app;
 mod core;
 mod device;
+mod net;
 mod remote;
 mod sideload;
 mod ui;

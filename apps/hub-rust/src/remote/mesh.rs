@@ -13,21 +13,14 @@ use crate::core::slots::{BASE_BRIDGE_PORT, BASE_STREAM_PORT, BASE_WDA_PORT};
 use crate::core::vault::Vault;
 
 const VPS_ADDR: &str = "98.84.189.148:2333";
-const VPS_HOST: &str = "98.84.189.148";
-/// TCP target the latency probe connects to. Deliberately NOT the rathole control
-/// port (`:2333`) — probing that floods the control channel with half-open
-/// connections. nginx on :443 is always up and measures the same host→VPS RTT.
-const VPS_PROBE_ADDR: &str = "98.84.189.148:443";
 
 #[derive(Debug, Clone)]
 pub struct TunnelStatus {
+    /// Whether the rathole control channel is currently connected. Internet
+    /// link quality (latency, loss, speed) is tracked separately by the
+    /// `net` module's `NetHealthMonitor`.
     pub is_running: bool,
     pub status_text: String,
-    pub latency_ms: u32,
-    pub avg_latency_ms: u32,
-    pub min_latency_ms: u32,
-    pub max_latency_ms: u32,
-    pub connection_speed_mbps: f64,
 }
 
 impl TunnelStatus {
@@ -35,11 +28,6 @@ impl TunnelStatus {
         Self {
             is_running: false,
             status_text: "Initializing tunnel...".to_string(),
-            latency_ms: 0,
-            avg_latency_ms: 0,
-            min_latency_ms: 0,
-            max_latency_ms: 0,
-            connection_speed_mbps: 0.0,
         }
     }
 }
@@ -77,12 +65,6 @@ impl TunnelSupervisor {
             info!("[TUNNEL] Background task spawned, entering run_rathole_loop");
             run_rathole_loop(status, should_run, slots, shutdown_tx).await;
         });
-
-        // Spawn latency measurement task
-        let status_lat = self.status.clone();
-        tokio::spawn(async move {
-            run_latency_probe(status_lat).await;
-        });
     }
 
     /// Atomically replace the set of active device slots and restart the tunnel
@@ -108,62 +90,6 @@ impl TunnelSupervisor {
     pub async fn stop(&self) {
         self.should_run.store(false, Ordering::SeqCst);
         let _ = self.shutdown_tx.send(true);
-    }
-}
-
-async fn run_latency_probe(status: Arc<tokio::sync::Mutex<TunnelStatus>>) {
-    info!("[LATENCY] Starting latency probe task");
-    let mut samples: Vec<u32> = Vec::new();
-
-    loop {
-        tokio::time::sleep(Duration::from_secs(2)).await;
-
-        // Measure TCP connection time to VPS
-        let start = std::time::Instant::now();
-        let connected = match tokio::net::TcpStream::connect(VPS_PROBE_ADDR).await {
-            Ok(stream) => {
-                drop(stream);
-                true
-            }
-            Err(_) => false,
-        };
-        let elapsed = start.elapsed().as_millis() as u32;
-
-        if connected {
-            samples.push(elapsed);
-            if samples.len() > 30 {
-                samples.remove(0);
-            }
-
-            let avg = samples.iter().sum::<u32>() / samples.len() as u32;
-            let min = *samples.iter().min().unwrap_or(&0);
-            let max = *samples.iter().max().unwrap_or(&0);
-
-            // Estimate connection speed based on latency (rough heuristic)
-            // Lower latency generally correlates with better bandwidth
-            let speed = if elapsed < 50 {
-                100.0
-            } else if elapsed < 100 {
-                50.0
-            } else if elapsed < 150 {
-                25.0
-            } else {
-                10.0
-            };
-
-            let mut st = status.lock().await;
-            st.latency_ms = elapsed;
-            st.avg_latency_ms = avg;
-            st.min_latency_ms = min;
-            st.max_latency_ms = max;
-            st.connection_speed_mbps = speed;
-            debug!("[LATENCY] TCP {}ms (avg {}ms, min {}ms, max {}ms)", elapsed, avg, min, max);
-        } else {
-            let mut st = status.lock().await;
-            st.latency_ms = 0;
-            st.avg_latency_ms = 0;
-            st.connection_speed_mbps = 0.0;
-        }
     }
 }
 
