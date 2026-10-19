@@ -2,7 +2,7 @@
 
 use iced::{
     alignment,
-    widget::{button, container, row, text, MouseArea, Space},
+    widget::{button, container, row, svg, text, MouseArea, Space},
     Alignment, Element, Length,
 };
 use crate::ui::theme::*;
@@ -15,6 +15,22 @@ pub enum TitleBarAction {
     Close,
 }
 
+use std::sync::LazyLock;
+
+/// Brand logo SVG (repo-root asset), embedded at build time and stretched 1px
+/// wider (28 -> 29): the viewport is widened with preserveAspectRatio="none"
+/// so the 28x19 viewBox art is drawn across 29x19 — countering the optical
+/// horizontal narrowness at titlebar size. The asset file itself is untouched
+/// (single source of truth for other consumers).
+static LOGO_SVG: LazyLock<Vec<u8>> = LazyLock::new(|| {
+    const RAW: &str = include_str!("../../../../assets/meridian-logoicon.svg");
+    RAW.replace(
+        "<svg width=\"28\" height=\"19\" viewBox=\"0 0 28 19\"",
+        "<svg width=\"29\" height=\"19\" viewBox=\"0 0 28 19\" preserveAspectRatio=\"none\"",
+    )
+    .into_bytes()
+});
+
 pub fn view_titlebar<'a, Message>(
     tunnel_online: bool,
     latency_ms: u32,
@@ -23,23 +39,11 @@ pub fn view_titlebar<'a, Message>(
 where
     Message: 'a + Clone,
 {
-    // 1. App branding
-    let title_badge = row![
-        text("MERIDIAN")
-            .font(FONT_SEMIBOLD)
-            .size(13)
-            .color(TEXT_PRIMARY),
-        container(
-            text("HUB")
-                .font(FONT_MONO)
-                .size(10)
-                .color(ACCENT_BLUE)
-        )
-        .padding([2, 6])
-        .style(style_pill_badge),
-    ]
-    .spacing(8)
-    .align_y(Alignment::Center);
+    // 1. App branding: the Meridian logo SVG, embedded at build time — drawn
+    //    at 29x19 (the viewport patch above stretches it 1px wider).
+    let logo = svg::Svg::new(svg::Handle::from_memory(LOGO_SVG.clone()))
+        .width(29.0)
+        .height(19.0);
 
     // 2. Tunnel status pill with latency
     let tunnel_indicator = if tunnel_online {
@@ -129,7 +133,7 @@ where
 
     // Draggable area: everything except window controls
     let draggable_content = row![
-        title_badge,
+        logo,
         Space::new().width(16),
         tunnel_indicator,
         Space::new().width(Length::Fill),
