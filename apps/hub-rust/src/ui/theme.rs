@@ -13,6 +13,8 @@ pub const FONT_MONO: Font = Font::with_name("GeistMono-Regular");
 // Brand & State Colors
 pub const BG_OBSIDIAN: Color = Color::from_rgb(0.043, 0.047, 0.055);       // #0B0C0E
 pub const BG_WINDOW: Color = Color::from_rgb8(0x16, 0x13, 0x1E);         // #16131E
+pub const BG_CONTENT: Color = Color::from_rgba8(0x0D, 0x0A, 0x13, 0.9);      // #0D0A13 @ 90%
+pub const BORDER_HAIRLINE: Color = Color::from_rgba8(0xF5, 0xF5, 0xF5, 0.15); // #F5F5F5 @ 15%
 pub const BG_SURFACE: Color = Color::from_rgb(0.078, 0.082, 0.098);        // #141519
 pub const BG_SURFACE_HOVER: Color = Color::from_rgb(0.11, 0.118, 0.137);  // #1C1E23
 pub const BORDER_SUBTLE: Color = Color::from_rgb(0.133, 0.137, 0.169);     // #22232B
@@ -42,6 +44,27 @@ pub fn style_window_background(_theme: &iced::Theme) -> container::Style {
             offset: Vector::new(0.0, 6.0),
             blur_radius: 16.0,
         },
+        text_color: Some(TEXT_PRIMARY),
+        snap: false,
+    }
+}
+
+/// Content surface: the panel the tab bar + tab bodies live on, nested
+/// inside the window shell below the titlebar.
+pub fn style_content_panel(_theme: &iced::Theme) -> container::Style {
+    container::Style {
+        background: Some(BG_CONTENT.into()),
+        border: Border {
+            color: BORDER_HAIRLINE,
+            width: 0.5,
+            radius: border::Radius {
+                top_left: 12.0,
+                top_right: 12.0,
+                bottom_right: 8.0,
+                bottom_left: 8.0,
+            },
+        },
+        shadow: Shadow::default(),
         text_color: Some(TEXT_PRIMARY),
         snap: false,
     }

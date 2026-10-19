@@ -145,7 +145,15 @@ where
             controls,
         ]
         .align_y(Alignment::Center)
-        .padding([8, 14])
+        // No bottom padding: the content panel wrapper below already insets
+        // the panel 4px, so the titlebar content sits 4px above the panel —
+        // matching the shell's 4px separation rhythm — instead of 12px.
+        .padding(iced::Padding {
+            top: 8.0,
+            right: 14.0,
+            bottom: 0.0,
+            left: 14.0,
+        })
     )
     .into()
 }

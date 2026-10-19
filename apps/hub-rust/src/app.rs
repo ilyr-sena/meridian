@@ -623,6 +623,17 @@ impl MeridianApp {
             .width(Length::Fill)
             .height(Length::Fill);
 
+        // Content surface: the tab bar + tab bodies live on a dark translucent
+        // panel with a hairline border, nested inside the window shell.
+        let content = container(
+            column![nav_bar, body]
+                .width(Length::Fill)
+                .height(Length::Fill),
+        )
+        .style(style_content_panel)
+        .width(Length::Fill)
+        .height(Length::Fill);
+
         // The panel fills a transparent margin inside the window so its drop
         // shadow renders on-screen — iced clips all painting at the window
         // bounds, so a Fill-sized panel pushes its shadow off-window (invisible).
@@ -631,8 +642,12 @@ impl MeridianApp {
         let panel = container(
             column![
                 titlebar,
-                nav_bar,
-                body,
+                // 4px separation between the content panel and the shell on
+                // every side; its radius 8 nests inside the shell's radius 12.
+                container(content)
+                    .padding(4.0)
+                    .width(Length::Fill)
+                    .height(Length::Fill),
             ]
         )
         .style(style_window_background)
