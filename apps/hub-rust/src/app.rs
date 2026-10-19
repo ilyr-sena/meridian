@@ -623,7 +623,12 @@ impl MeridianApp {
             .width(Length::Fill)
             .height(Length::Fill);
 
-        let window_layout = container(
+        // The panel fills a transparent margin inside the window so its drop
+        // shadow renders on-screen — iced clips all painting at the window
+        // bounds, so a Fill-sized panel pushes its shadow off-window (invisible).
+        // The margins mirror the shadow extents: top = blur - offset, sides =
+        // blur, bottom = blur + offset.
+        let panel = container(
             column![
                 titlebar,
                 nav_bar,
@@ -633,6 +638,16 @@ impl MeridianApp {
         .style(style_window_background)
         .width(Length::Fill)
         .height(Length::Fill);
+
+        let window_layout = container(panel)
+            .padding(iced::Padding {
+                top: 10.0,
+                right: 16.0,
+                bottom: 22.0,
+                left: 16.0,
+            })
+            .width(Length::Fill)
+            .height(Length::Fill);
 
         if self.sideload.is_open {
             let modal = view_sideload_modal(

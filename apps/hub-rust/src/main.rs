@@ -21,6 +21,7 @@ use tracing_subscriber::EnvFilter;
 use crate::app::MeridianApp;
 use crate::core::firewall::ensure_firewall_rules;
 use crate::core::privilege::ensure_admin_or_relaunch;
+use crate::ui::theme::TEXT_PRIMARY;
 
 // Embedded Fonts
 const FONT_GEIST_REGULAR: &[u8] = include_bytes!("../assets/fonts/Geist-Regular.ttf");
@@ -59,6 +60,7 @@ fn main() -> iced::Result {
     )
     .title(app_title)
     .theme(app_theme)
+    .style(app_style)
     .subscription(MeridianApp::subscription)
     .window(window::Settings {
         size: Size::new(880.0, 640.0),
@@ -81,6 +83,18 @@ fn app_title(_: &MeridianApp) -> String {
 
 fn app_theme(_: &MeridianApp) -> iced::Theme {
     iced::Theme::Dark
+}
+
+/// Transparent window surface: iced clears the wgpu surface with this style's
+/// `background_color` every frame, and the default (opaque theme base color)
+/// was painting solid corners outside the rounded window container drawn in
+/// `MeridianApp::view`. Clearing transparent lets the rounded corners show
+/// through to the desktop as intended.
+fn app_style(_: &MeridianApp, _: &iced::Theme) -> iced::theme::Style {
+    iced::theme::Style {
+        background_color: iced::Color::TRANSPARENT,
+        text_color: TEXT_PRIMARY,
+    }
 }
 
 impl MeridianApp {

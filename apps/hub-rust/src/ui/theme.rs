@@ -12,6 +12,7 @@ pub const FONT_MONO: Font = Font::with_name("GeistMono-Regular");
 
 // Brand & State Colors
 pub const BG_OBSIDIAN: Color = Color::from_rgb(0.043, 0.047, 0.055);       // #0B0C0E
+pub const BG_WINDOW: Color = Color::from_rgb8(0x16, 0x13, 0x1E);         // #16131E
 pub const BG_SURFACE: Color = Color::from_rgb(0.078, 0.082, 0.098);        // #141519
 pub const BG_SURFACE_HOVER: Color = Color::from_rgb(0.11, 0.118, 0.137);  // #1C1E23
 pub const BORDER_SUBTLE: Color = Color::from_rgb(0.133, 0.137, 0.169);     // #22232B
@@ -30,16 +31,16 @@ pub const ACCENT_AMBER: Color = Color::from_rgb(0.96, 0.62, 0.04);        // #F5
 // Container Styles
 pub fn style_window_background(_theme: &iced::Theme) -> container::Style {
     container::Style {
-        background: Some(BG_OBSIDIAN.into()),
+        background: Some(BG_WINDOW.into()),
         border: Border {
-            color: BORDER_SUBTLE,
-            width: 1.0,
+            color: Color::TRANSPARENT,
+            width: 0.0,
             radius: border::Radius::from(12.0),
         },
         shadow: Shadow {
-            color: Color::from_rgba(0.0, 0.0, 0.0, 0.6),
-            offset: Vector::new(0.0, 8.0),
-            blur_radius: 24.0,
+            color: Color::from_rgba(0.0, 0.0, 0.0, 0.5),
+            offset: Vector::new(0.0, 6.0),
+            blur_radius: 16.0,
         },
         text_color: Some(TEXT_PRIMARY),
         snap: false,
