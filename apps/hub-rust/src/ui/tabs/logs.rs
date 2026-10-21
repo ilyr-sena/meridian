@@ -117,7 +117,7 @@ where
         background: Some(BG_SURFACE.into()),
         border: iced::Border {
             color: BORDER_SUBTLE,
-            width: 1.0,
+            width: 0.5,
             radius: iced::border::Radius::from(8.0),
         },
         ..Default::default()

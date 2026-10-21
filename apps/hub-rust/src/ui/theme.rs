@@ -1,6 +1,7 @@
 //! Linear & Attio inspired dark design system for Meridian Hub.
 //!
-//! Obsidian, Charcoal, Emerald, Electric Blue palette with pill borders and crisp styling.
+//! Indigo-tinted dark palette (blue-violet shell + surfaces), Emerald/Blue/Amber
+//! state colors, pill borders and crisp styling.
 
 use iced::{
     border,
@@ -31,14 +32,15 @@ pub const FONT_SEMIBOLD: Font = Font {
 };
 pub const FONT_MONO: Font = Font::with_name("Geist Mono");
 
-// Brand & State Colors
-pub const BG_OBSIDIAN: Color = Color::from_rgb(0.043, 0.047, 0.055);       // #0B0C0E
+// Brand & State Colors — the whole base family shares the same blue-violet cast
+// (dominant blue channel), so cards/pills/inputs sit coherently on the window.
+pub const BG_OBSIDIAN: Color = Color::from_rgb8(0x0B, 0x0B, 0x13);       // #0B0B13 — deep press state + modal card
 pub const BG_WINDOW: Color = Color::from_rgb8(0x16, 0x13, 0x1E);         // #16131E
 pub const BG_CONTENT: Color = Color::from_rgba8(0x0D, 0x0A, 0x13, 0.9);      // #0D0A13 @ 90%
 pub const BORDER_HAIRLINE: Color = Color::from_rgba8(0xF5, 0xF5, 0xF5, 0.15); // #F5F5F5 @ 15%
-pub const BG_SURFACE: Color = Color::from_rgb(0.078, 0.082, 0.098);        // #141519
-pub const BG_SURFACE_HOVER: Color = Color::from_rgb(0.11, 0.118, 0.137);  // #1C1E23
-pub const BORDER_SUBTLE: Color = Color::from_rgb(0.133, 0.137, 0.169);     // #22232B
+pub const BG_SURFACE: Color = Color::from_rgb8(0x0F, 0x0F, 0x18);        // #0F0F18 — card surface (was #141519)
+pub const BG_SURFACE_HOVER: Color = Color::from_rgb8(0x17, 0x17, 0x26);  // #171726 (was #1C1E23)
+pub const BORDER_SUBTLE: Color = Color::from_rgb8(0x26, 0x26, 0x39);     // #262639 (was #22232B)
 pub const BORDER_FOCUS: Color = Color::from_rgb(0.231, 0.51, 0.965);      // #3B82F6
 
 pub const TEXT_PRIMARY: Color = Color::from_rgb(0.96, 0.96, 0.98);        // #F4F4F6
@@ -96,7 +98,7 @@ pub fn style_card(_theme: &iced::Theme) -> container::Style {
         background: Some(BG_SURFACE.into()),
         border: Border {
             color: BORDER_SUBTLE,
-            width: 1.0,
+            width: 0.5,
             radius: border::Radius::from(10.0),
         },
         shadow: Shadow {
@@ -221,7 +223,7 @@ pub fn style_text_input(_theme: &iced::Theme, status: text_input::Status) -> tex
         background: BG_SURFACE.into(),
         border: Border {
             color: border_color,
-            width: 1.0,
+            width: 0.5,
             radius: border::Radius::from(8.0),
         },
         icon: TEXT_MUTED,
