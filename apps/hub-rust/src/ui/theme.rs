@@ -25,6 +25,13 @@ pub const FONT_MEDIUM: Font = Font {
     weight: Weight::Medium,
     ..Font::DEFAULT
 };
+/// Geist Medium with tightened label tracking (~-0.025 em ≈ -0.4px per glyph
+/// at 16px) via the vendored iced `Font::letter_spacing` patch — used for tab
+/// selectors and button labels.
+pub const FONT_MEDIUM_TIGHT: Font = Font {
+    letter_spacing: -0.025,
+    ..FONT_MEDIUM
+};
 pub const FONT_SEMIBOLD: Font = Font {
     family: Family::Name("Geist"),
     weight: Weight::Semibold,
@@ -185,23 +192,22 @@ pub fn style_button_secondary(_theme: &iced::Theme, status: button::Status) -> b
     }
 }
 
+// Tab selectors: text-only — no background, no border. The selected tab reads
+// full white; inactive tabs are white @ 60% opacity (80% while hovered).
 pub fn style_tab_button(_theme: &iced::Theme, status: button::Status, active: bool) -> button::Style {
-    let (bg, text) = if active {
-        (Color::from_rgba(1.0, 1.0, 1.0, 0.1), TEXT_PRIMARY)
+    let text_color = if active {
+        Color::WHITE
     } else {
         match status {
-            button::Status::Hovered => (Color::from_rgba(1.0, 1.0, 1.0, 0.05), TEXT_PRIMARY),
-            _ => (Color::TRANSPARENT, TEXT_SECONDARY),
+            button::Status::Hovered => Color::from_rgba(1.0, 1.0, 1.0, 0.8),
+            _ => Color::from_rgba(1.0, 1.0, 1.0, 0.6),
         }
     };
 
     button::Style {
-        background: Some(bg.into()),
-        text_color: text,
-        border: Border {
-            radius: border::Radius::from(9999.0),
-            ..Default::default()
-        },
+        background: None,
+        text_color,
+        border: Border::default(),
         shadow: Shadow::default(),
         snap: false,
     }

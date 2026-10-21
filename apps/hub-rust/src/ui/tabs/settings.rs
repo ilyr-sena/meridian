@@ -85,7 +85,7 @@ where
     .style(style_card);
 
     // 3. Save Button
-    let btn_save = button(text("Save Preferences").font(FONT_MEDIUM).size(13))
+    let btn_save = button(text("Save Preferences").font(FONT_MEDIUM_TIGHT).size(13))
         .padding([8, 24])
         .on_press(on_save)
         .style(style_button_primary);

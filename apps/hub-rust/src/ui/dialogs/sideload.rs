@@ -92,7 +92,7 @@ where
                     .size(12)
                     .width(Length::Fill)
                     .style(style_text_input),
-                button(text("Verify").font(FONT_MEDIUM).size(12))
+                button(text("Verify").font(FONT_MEDIUM_TIGHT).size(12))
                     .padding([8, 14])
                     .on_press(on_submit_two_factor)
                     .style(style_button_primary),
@@ -105,12 +105,12 @@ where
     };
 
     let actions = row![
-        button(text("Cancel").font(FONT_MEDIUM).size(12))
+        button(text("Cancel").font(FONT_MEDIUM_TIGHT).size(12))
             .padding([7, 16])
             .on_press(on_cancel)
             .style(style_button_secondary),
         Space::new().width(Length::Fill),
-        button(text("Sign & Install").font(FONT_MEDIUM).size(12))
+        button(text("Sign & Install").font(FONT_MEDIUM_TIGHT).size(12))
             .padding([7, 20])
             .on_press(on_submit)
             .style(style_button_primary),

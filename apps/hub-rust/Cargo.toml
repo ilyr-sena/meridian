@@ -81,3 +81,15 @@ strip = true
 [patch.crates-io]
 isideload = { path = "vendor/isideload" }
 
+# Vendored iced 0.14.0 (core + graphics) with one upstreamable addition:
+# `Font::letter_spacing(f32)` in EM units — passed through to cosmic-text's
+# native `Attrs::letter_spacing` (already in our dependency stack; the shaper
+# applies it per glyph). Upstream iced 0.14 exposes no tracking control at
+# all, which previously forced font-file surgery (see src/ui/fonts.rs).
+# Keep these trees in sync with upstream 0.14.0 apart from the
+# `letter-spacing` commits:
+#   * iced_core/src/font.rs:      Font field + const builder
+#   * iced_graphics/src/text.rs:  to_attributes() forwards it to cosmic-text
+iced_core = { path = "vendor/iced_core" }
+iced_graphics = { path = "vendor/iced_graphics" }
+

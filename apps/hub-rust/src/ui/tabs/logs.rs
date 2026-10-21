@@ -36,7 +36,7 @@ where
     // 1. Controls Bar: Level filters, Search input, Clear
     let level_btn = |level: LogLevel, label: &'static str| {
         let active = selected_level == level;
-        button(text(label).font(FONT_MEDIUM).size(11))
+        button(text(label).font(FONT_MEDIUM_TIGHT).size(11))
             .padding([4, 12])
             .on_press(on_select_level(level))
             .style(move |theme, status| style_tab_button(theme, status, active))
@@ -57,12 +57,12 @@ where
         .width(180)
         .style(style_text_input);
 
-    let btn_clear = button(text("Clear").font(FONT_MEDIUM).size(11))
+    let btn_clear = button(text("Clear").font(FONT_MEDIUM_TIGHT).size(11))
         .padding([4, 12])
         .on_press(on_clear)
         .style(style_button_secondary);
 
-    let btn_copy = button(text("Copy").font(FONT_MEDIUM).size(11))
+    let btn_copy = button(text("Copy").font(FONT_MEDIUM_TIGHT).size(11))
         .padding([4, 12])
         .on_press(on_copy)
         .style(style_button_secondary);

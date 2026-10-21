@@ -568,8 +568,11 @@ impl MeridianApp {
 
         let tab_btn = |tab: Tab, label: &'static str| {
             let active = self.active_tab == tab;
-            button(text(label).font(FONT_MEDIUM).size(12))
-                .padding([6, 14])
+            button(
+                text(label)
+                    .font(FONT_MEDIUM_TIGHT)
+                    .size(16),
+            )
                 .on_press(Message::TabSelected(tab))
                 .style(move |theme, status| style_tab_button(theme, status, active))
         };
@@ -577,8 +580,8 @@ impl MeridianApp {
         let nav_bar = container(
             row![
                 tab_btn(Tab::Devices, "Devices"),
-                tab_btn(Tab::Status, "Status & Tunnel"),
-                tab_btn(Tab::Logs, "Console Logs"),
+                tab_btn(Tab::Status, "Status"),
+                tab_btn(Tab::Logs, "Logs"),
                 tab_btn(Tab::Settings, "Settings"),
             ]
             .spacing(4)

@@ -161,7 +161,7 @@ where
     // device flips the card back to "Sideload Runner" in real time.
     let actions: Element<'a, Message> = match dev.session_phase {
         SessionPhase::Running => {
-            let btn_stop = button(text("Stop Session").font(FONT_MEDIUM).size(12))
+            let btn_stop = button(text("Stop Session").font(FONT_MEDIUM_TIGHT).size(12))
                 .padding([6, 16])
                 .on_press(on_stop(dev.udid.clone()))
                 .style(style_button_danger);
@@ -169,7 +169,7 @@ where
             row![btn_stop].spacing(8).align_y(Alignment::Center).into()
         }
         SessionPhase::Starting => {
-            let btn_starting = button(text("Starting...").font(FONT_MEDIUM).size(12))
+            let btn_starting = button(text("Starting...").font(FONT_MEDIUM_TIGHT).size(12))
                 .padding([6, 16])
                 .style(style_button_secondary);
 
@@ -186,7 +186,7 @@ where
                 } else {
                     "Start Session"
                 };
-                let btn_start = button(text(label).font(FONT_MEDIUM).size(12))
+                let btn_start = button(text(label).font(FONT_MEDIUM_TIGHT).size(12))
                     .padding([6, 18])
                     .on_press(on_start(dev.udid.clone()))
                     .style(style_button_primary);
@@ -194,7 +194,7 @@ where
                 row![btn_start].spacing(8).align_y(Alignment::Center).into()
             }
             DeviceState::NeedsSideload => {
-                let btn_sideload = button(text("Sideload Runner").font(FONT_MEDIUM).size(12))
+                let btn_sideload = button(text("Sideload Runner").font(FONT_MEDIUM_TIGHT).size(12))
                     .padding([6, 20])
                     .on_press(on_sideload(dev.udid.clone()))
                     .style(style_button_primary);
@@ -207,7 +207,7 @@ where
             DeviceState::DeveloperModeOff | DeviceState::Locked | DeviceState::Unpaired => {
                 // Actionable path shown as a disabled control; the message below
                 // tells the user exactly what to do.
-                let btn_disabled = button(text("Start Session").font(FONT_MEDIUM).size(12))
+                let btn_disabled = button(text("Start Session").font(FONT_MEDIUM_TIGHT).size(12))
                     .padding([6, 18])
                     .style(style_button_secondary);
 
