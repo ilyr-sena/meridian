@@ -31,6 +31,10 @@ pub const FONT_SEMIBOLD: Font = Font {
     ..Font::DEFAULT
 };
 pub const FONT_MONO: Font = Font::with_name("Geist Mono");
+/// Chip-only mono variant with tightened tracking (~-5%) — the embedded
+/// GeistMono face patched at build time (see `ui::fonts`). Registered as a
+/// separate family so plain mono text (logs, UDIDs, endpoints) is untouched.
+pub const FONT_MONO_TIGHT: Font = Font::with_name("Geist Mono Tight");
 
 // Brand & State Colors — the whole base family shares the same blue-violet cast
 // (dominant blue channel), so cards/pills/inputs sit coherently on the window.
@@ -48,8 +52,8 @@ pub const TEXT_SECONDARY: Color = Color::from_rgb(0.55, 0.56, 0.62);      // #8C
 pub const TEXT_MUTED: Color = Color::from_rgb(0.38, 0.39, 0.44);          // #616470
 
 pub const ACCENT_EMERALD: Color = Color::from_rgb(0.063, 0.725, 0.506);    // #10B981
+pub const ACCENT_BRAND: Color = Color::from_rgb8(0x32, 0x4B, 0xED);    // #324BED — Meridian brand blue (the logo mark)
 pub const ACCENT_BLUE: Color = Color::from_rgb(0.231, 0.51, 0.965);       // #3B82F6
-pub const ACCENT_INDIGO: Color = Color::from_rgb(0.322, 0.399, 0.906);    // #5266E7
 pub const ACCENT_ROSE: Color = Color::from_rgb(0.937, 0.267, 0.267);       // #EF4444
 pub const ACCENT_AMBER: Color = Color::from_rgb(0.96, 0.62, 0.04);        // #F59E0B
 
@@ -128,9 +132,9 @@ pub fn style_pill_badge(_theme: &iced::Theme) -> container::Style {
 // Button Styles (Full Pill)
 pub fn style_button_primary(_theme: &iced::Theme, status: button::Status) -> button::Style {
     let base_bg = match status {
-        button::Status::Hovered => Color::from_rgb(0.38, 0.46, 0.94),
-        button::Status::Pressed => Color::from_rgb(0.28, 0.35, 0.85),
-        _ => ACCENT_INDIGO,
+        button::Status::Hovered => Color::from_rgb8(0x4B, 0x61, 0xEF),   // brand blue +12% white
+        button::Status::Pressed => Color::from_rgb8(0x2B, 0x40, 0xC9),   // brand blue -15%
+        _ => ACCENT_BRAND,
     };
     button::Style {
         background: Some(base_bg.into()),
@@ -139,11 +143,7 @@ pub fn style_button_primary(_theme: &iced::Theme, status: button::Status) -> but
             radius: border::Radius::from(9999.0),
             ..Default::default()
         },
-        shadow: Shadow {
-            color: Color::from_rgba(0.322, 0.399, 0.906, 0.25),
-            offset: Vector::new(0.0, 2.0),
-            blur_radius: 8.0,
-        },
+        shadow: Shadow::default(),
         snap: false,
     }
 }
@@ -161,11 +161,7 @@ pub fn style_button_danger(_theme: &iced::Theme, status: button::Status) -> butt
             radius: border::Radius::from(9999.0),
             ..Default::default()
         },
-        shadow: Shadow {
-            color: Color::from_rgba(0.937, 0.267, 0.267, 0.2),
-            offset: Vector::new(0.0, 2.0),
-            blur_radius: 6.0,
-        },
+        shadow: Shadow::default(),
         snap: false,
     }
 }
@@ -202,6 +198,54 @@ pub fn style_tab_button(_theme: &iced::Theme, status: button::Status, active: bo
     button::Style {
         background: Some(bg.into()),
         text_color: text,
+        border: Border {
+            radius: border::Radius::from(9999.0),
+            ..Default::default()
+        },
+        shadow: Shadow::default(),
+        snap: false,
+    }
+}
+
+// Window Control Buttons (Titlebar)
+//
+// Perfectly circular; the background appears only on hover/press — the idle
+// state is fully transparent with no border, keeping the titlebar clean.
+pub fn style_window_control_secondary(
+    _theme: &iced::Theme,
+    status: button::Status,
+) -> button::Style {
+    let (background, text_color) = match status {
+        button::Status::Hovered => (Some(BG_SURFACE_HOVER.into()), TEXT_PRIMARY),
+        button::Status::Pressed => (Some(BG_SURFACE.into()), TEXT_PRIMARY),
+        _ => (None, TEXT_SECONDARY),
+    };
+
+    button::Style {
+        background,
+        text_color,
+        border: Border {
+            radius: border::Radius::from(9999.0),
+            ..Default::default()
+        },
+        shadow: Shadow::default(),
+        snap: false,
+    }
+}
+
+pub fn style_window_control_danger(
+    _theme: &iced::Theme,
+    status: button::Status,
+) -> button::Style {
+    let (background, text_color) = match status {
+        button::Status::Hovered => (Some(ACCENT_ROSE.into()), Color::WHITE),
+        button::Status::Pressed => (Some(Color::from_rgb(0.8, 0.2, 0.2).into()), Color::WHITE),
+        _ => (None, TEXT_SECONDARY),
+    };
+
+    button::Style {
+        background,
+        text_color,
         border: Border {
             radius: border::Radius::from(9999.0),
             ..Default::default()

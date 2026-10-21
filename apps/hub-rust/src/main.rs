@@ -75,6 +75,7 @@ fn main() -> iced::Result {
     .font(FONT_GEIST_MEDIUM)
     .font(FONT_GEIST_SEMIBOLD)
     .font(FONT_GEIST_MONO)
+    .font(crate::ui::fonts::GEIST_MONO_TIGHT.clone())
     .run()
 }
 

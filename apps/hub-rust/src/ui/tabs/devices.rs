@@ -94,7 +94,7 @@ where
 
     let slot_pill = container(
         text(format!("Slot {}", dev.ports.slot))
-            .font(FONT_MONO)
+            .font(FONT_MONO_TIGHT)
             .size(11)
             .color(TEXT_MUTED)
     )
@@ -124,7 +124,7 @@ where
     let ports_row = row![
         container(
             text(format!("WDA :{}", dev.ports.wda))
-                .font(FONT_MONO)
+                .font(FONT_MONO_TIGHT)
                 .size(11)
                 .color(TEXT_SECONDARY)
         )
@@ -132,7 +132,7 @@ where
         .style(style_pill_badge),
         container(
             text(format!("STREAM :{}", dev.ports.stream))
-                .font(FONT_MONO)
+                .font(FONT_MONO_TIGHT)
                 .size(11)
                 .color(TEXT_SECONDARY)
         )
@@ -140,7 +140,7 @@ where
         .style(style_pill_badge),
         container(
             text(format!("TOUCH :{}", dev.ports.bridge))
-                .font(FONT_MONO)
+                .font(FONT_MONO_TIGHT)
                 .size(11)
                 .color(TEXT_SECONDARY)
         )

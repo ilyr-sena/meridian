@@ -1,5 +1,6 @@
 pub mod theme;
 pub mod titlebar;
+pub mod fonts;
 pub mod tabs {
     pub mod devices;
     pub mod status;

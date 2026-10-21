@@ -91,11 +91,11 @@ where
         table_rows.push(
             container(
                 row![
-                    text(format!("#{}", d.ports.slot)).font(FONT_MONO).size(12).color(TEXT_SECONDARY).width(60),
+                    text(format!("#{}", d.ports.slot)).font(FONT_MONO_TIGHT).size(12).color(TEXT_SECONDARY).width(60),
                     text(d.masked_name(mask_sensitive)).font(FONT_MEDIUM).size(12).color(TEXT_PRIMARY).width(160),
-                    text(format!(":{}", d.ports.wda)).font(FONT_MONO).size(12).color(ACCENT_BLUE).width(80),
-                    text(format!(":{}", d.ports.stream)).font(FONT_MONO).size(12).color(ACCENT_EMERALD).width(80),
-                    text(format!(":{}", d.ports.bridge)).font(FONT_MONO).size(12).color(TEXT_SECONDARY).width(80),
+                    text(format!(":{}", d.ports.wda)).font(FONT_MONO_TIGHT).size(12).color(ACCENT_BLUE).width(80),
+                    text(format!(":{}", d.ports.stream)).font(FONT_MONO_TIGHT).size(12).color(ACCENT_EMERALD).width(80),
+                    text(format!(":{}", d.ports.bridge)).font(FONT_MONO_TIGHT).size(12).color(TEXT_SECONDARY).width(80),
                     text(state_label).font(FONT_REGULAR).size(12).color(TEXT_SECONDARY).width(100),
                 ]
                 .align_y(Alignment::Center)

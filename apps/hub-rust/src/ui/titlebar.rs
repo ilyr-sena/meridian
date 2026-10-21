@@ -1,7 +1,6 @@
 //! Custom frameless title bar with drag support, status pill, and window controls.
 
 use iced::{
-    alignment,
     widget::{button, container, row, svg, text, MouseArea, Space},
     Alignment, Element, Length,
 };
@@ -30,6 +29,10 @@ static LOGO_SVG: LazyLock<Vec<u8>> = LazyLock::new(|| {
     )
     .into_bytes()
 });
+
+/// Window control icons (11x11 hairline strokes), embedded at build time.
+const MINIMIZE_ICON: &[u8] = include_bytes!("../../assets/icons/minimize-icon.svg");
+const CLOSE_ICON: &[u8] = include_bytes!("../../assets/icons/close-icon.svg");
 
 pub fn view_titlebar<'a, Message>(
     tunnel_online: bool,
@@ -71,7 +74,7 @@ where
                         ..Default::default()
                     }),
                 text(pill_text)
-                    .font(FONT_MONO)
+                    .font(FONT_MONO_TIGHT)
                     .size(11)
                     .color(TEXT_SECONDARY),
             ]
@@ -93,7 +96,7 @@ where
                         ..Default::default()
                     }),
                 text("Tunnel Offline")
-                    .font(FONT_MONO)
+                    .font(FONT_MONO_TIGHT)
                     .size(11)
                     .color(TEXT_MUTED),
             ]
@@ -106,26 +109,26 @@ where
 
     // 3. Window Control Buttons
     let btn_min = button(
-        text("—")
-            .size(11)
-            .align_x(alignment::Horizontal::Center)
-            .align_y(alignment::Vertical::Center)
+        svg::Svg::new(svg::Handle::from_memory(MINIMIZE_ICON))
+            .width(12)
+            .height(12),
     )
     .on_press(on_action(TitleBarAction::Minimize))
-    .width(28)
+    .width(24)
     .height(24)
-    .style(style_button_secondary);
+    .padding(6)
+    .style(style_window_control_secondary);
 
     let btn_close = button(
-        text("✕")
-            .size(11)
-            .align_x(alignment::Horizontal::Center)
-            .align_y(alignment::Vertical::Center)
+        svg::Svg::new(svg::Handle::from_memory(CLOSE_ICON))
+            .width(12)
+            .height(12),
     )
     .on_press(on_action(TitleBarAction::Close))
-    .width(28)
+    .width(24)
     .height(24)
-    .style(style_button_danger);
+    .padding(6)
+    .style(style_window_control_danger);
 
     let controls = row![btn_min, btn_close]
         .spacing(6)
