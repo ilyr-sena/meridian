@@ -2,13 +2,34 @@
 //!
 //! Obsidian, Charcoal, Emerald, Electric Blue palette with pill borders and crisp styling.
 
-use iced::{border, widget::{button, container, text_input}, Border, Color, Font, Shadow, Vector};
+use iced::{
+    border,
+    font::{Family, Weight},
+    widget::{button, container, text_input},
+    Border, Color, Font, Shadow, Vector,
+};
 
-// Embedded Fonts
-pub const FONT_REGULAR: Font = Font::with_name("Geist-Regular");
-pub const FONT_MEDIUM: Font = Font::with_name("Geist-Medium");
-pub const FONT_SEMIBOLD: Font = Font::with_name("Geist-SemiBold");
-pub const FONT_MONO: Font = Font::with_name("GeistMono-Regular");
+// Embedded Fonts. cosmic-text/fontdb resolve faces by TYPOGRAPHIC family name
+// (name-table ID 16), not by file name: the three Geist weights all register
+// family "Geist" (picked apart by weight), and GeistMono registers as
+// "Geist Mono". The previous "Geist-Regular"-style lookups matched no
+// registered family and silently fell back to the system sans-serif.
+pub const FONT_REGULAR: Font = Font {
+    family: Family::Name("Geist"),
+    weight: Weight::Normal,
+    ..Font::DEFAULT
+};
+pub const FONT_MEDIUM: Font = Font {
+    family: Family::Name("Geist"),
+    weight: Weight::Medium,
+    ..Font::DEFAULT
+};
+pub const FONT_SEMIBOLD: Font = Font {
+    family: Family::Name("Geist"),
+    weight: Weight::Semibold,
+    ..Font::DEFAULT
+};
+pub const FONT_MONO: Font = Font::with_name("Geist Mono");
 
 // Brand & State Colors
 pub const BG_OBSIDIAN: Color = Color::from_rgb(0.043, 0.047, 0.055);       // #0B0C0E

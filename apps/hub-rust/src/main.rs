@@ -21,7 +21,7 @@ use tracing_subscriber::EnvFilter;
 use crate::app::MeridianApp;
 use crate::core::firewall::ensure_firewall_rules;
 use crate::core::privilege::ensure_admin_or_relaunch;
-use crate::ui::theme::TEXT_PRIMARY;
+use crate::ui::theme::{FONT_REGULAR, TEXT_PRIMARY};
 
 // Embedded Fonts
 const FONT_GEIST_REGULAR: &[u8] = include_bytes!("../assets/fonts/Geist-Regular.ttf");
@@ -61,6 +61,7 @@ fn main() -> iced::Result {
     .title(app_title)
     .theme(app_theme)
     .style(app_style)
+    .default_font(FONT_REGULAR)
     .subscription(MeridianApp::subscription)
     .window(window::Settings {
         size: Size::new(880.0, 640.0),
