@@ -31,47 +31,45 @@ use crate::auth::grandslam::GrandSlam;
 // GSA client identity — see docs/ANISETTE_GSA_80045_FIX.md for full history.
 //
 // Apple rotates which `X-Mme-Client-Info` / `User-Agent` pairs their GrandSlam
-// gate accepts. Eras so far:
+// gate accepts — and as of 2026-10 the gates are PER-ENDPOINT (verified live
+// with a real session via the gsa_probe tool):
 //
 //   1. omnisette's raw machine description (`…Xcode/3594.4.19`) → hard
-//      `503` by Apple's WAF. Only the HTTP header value matters; the cpd
-//      body does not need a client-info entry. Fixed by switching to the
-//      akd client-info variant (era-2 constants below — this fork's
-//      original patch).
-//   2. 2026-10: the MacBookPro/macOS akd pair began failing the login gate
-//      with `ec=-80045 "This action cannot be completed at this time"`
-//      (community-wide; anisette/Sideloadly users hit the same wall within
-//      days). Verified by direct A/B test against GsService2 with a dummy
-//      account + fresh OTP: era-2 pair → -80045 every time; the Windows/
-//      iTunes pair below → gate + anisette accepted, Apple proceeded to
-//      real credential validation (`-20970 "account information was
-//      entered incorrectly"` for the nonexistent test account).
+//      `503` by Apple's WAF (era 1).
+//   2. 2026-10: the MacBookPro/macOS akd pair began failing the LOGIN gate
+//      with `ec=-80045` (era 2 → fixed by switching login to the
+//      Windows/iTunes pair below).
+//   3. 2026-10, days later: the `apptokens` request (Xcode developer token)
+//      began rejecting the Windows/iTunes pair with `ec=-80046` while
+//      ACCEPTING the akd macOS pairs — including the very era-2 pair that
+//      login rejects. The two gates are now opposites: login wants the
+//      iTunes identity, apptokens wants an akd identity.
 //
-// The active identity MUST keep its client-info and User-Agent paired to the
-// same platform: `CFNetwork/808.1.4` is the iTunes-era akd user agent on
-// Windows. A mismatched pair (e.g. the Android client-info variant reported
-// in the community, `<Pixel 7> <Android;14;UQ1A.240205.002>
-// <com.apple.AuthKit/1 (com.apple.akd/1.0)>`, with any CFNetwork UA) gets
-// 503'd by the WAF outright — verified empirically 2026-10.
+// Hence the identity split: [`ITUNES_*`] drives all login/2FA requests via
+// `get_client_info()`, and [`AKD_CLIENT_INFO`] + [`PYTHON_USER_AGENT`] (the
+// era-2 pair, historically proven for the whole flow and re-verified at
+// apptokens today) drive the app-token requests via
+// `get_app_token_client_info()`.
+//
+// The identities MUST stay internally consistent (client-info platform
+// paired with a plausible user agent); mixing platforms (e.g. an Android
+// client-info with any CFNetwork UA) gets 503'd by the WAF outright.
 // ---------------------------------------------------------------------------
 
-/// Active GSA identity (accepted as of 2026-10): akd speaking for
+/// Login identity (accepted as of 2026-10): akd speaking for
 /// iTunes 12.12.4.1 on Windows 6.2 (Server 2012 family).
 const ITUNES_CLIENT_INFO: &str =
     "<PC> <Windows;6.2(0,0);9200> <com.apple.AuthKit/1 (com.apple.iTunes/12.12.4.1)>";
 /// User-Agent paired with [`ITUNES_CLIENT_INFO`] (same platform, same era).
 const ITUNES_USER_AGENT: &str = "akd/1.0 CFNetwork/808.1.4";
 
-/// LEGACY (era 2, broken by -80045 since 2026-10) — the `X-MMe-Client-Info`
-/// value that fixed the Xcode/3594.4.19 WAF 503 of era 1. Kept for reference
-/// and instant rollback: point `get_client_info()` back at this +
-/// [`PYTHON_USER_AGENT`] if the iTunes pair above gets rotated out too.
-#[allow(dead_code)]
+/// App-token identity (accepted at `apptokens` as of 2026-10-21): the
+/// era-2 MacBookPro/macOS akd pair. Login rejects this with -80045 — see
+/// the identity block above for the per-endpoint split.
 const AKD_CLIENT_INFO: &str =
     "<MacBookPro13,2> <macOS;13.1;22C65> <com.apple.AuthKit/1 (com.apple.akd/1.0)>";
-/// LEGACY (era 2) — `User-Agent` the Python hub sent to `gsa.apple.com`
-/// (the seasoned value that was accepted through era 2).
-#[allow(dead_code)]
+/// User-Agent paired with [`AKD_CLIENT_INFO`] — the seasoned value that
+/// served the whole flow through era 2.
 const PYTHON_USER_AGENT: &str = "akd/1.0 CFNetwork/978.0.7 Darwin/18.7.0";
 
 /// Raw header JSON returned by an omnisette-server `GET /`.
@@ -149,13 +147,23 @@ impl AnisetteProvider for RemoteAnisetteProvider {
     }
 
     async fn get_client_info(&self) -> Result<AnisetteClientInfo, Report> {
-        // Client identity presented to GSA. 2026-10: the macOS akd pair is
-        // rejected with -80045 at the login gate; the Windows/iTunes pair is
-        // the verified-working one (see the identity block above for
-        // history, evidence and rollback).
+        // Login identity: 2026-10's -80045 fix — the macOS akd pair is
+        // rejected at the login gate, the Windows/iTunes pair passes it
+        // (and the whole 2FA exchange; verified live again 2026-10-21).
         Ok(AnisetteClientInfo {
             client_info: ITUNES_CLIENT_INFO.to_string(),
             user_agent: ITUNES_USER_AGENT.to_string(),
+        })
+    }
+
+    async fn get_app_token_client_info(&self) -> Result<AnisetteClientInfo, Report> {
+        // App-token identity: the mirror image of the login gate —
+        // `apptokens` rejects the iTunes pair with -80046 and accepts the
+        // akd macOS pairs (verified live 2026-10-21: iTunes → ec=-80046,
+        // MacBookPro13,2 akd → ec=0 accepted, MacBookPro16,1 akd → ec=0).
+        Ok(AnisetteClientInfo {
+            client_info: AKD_CLIENT_INFO.to_string(),
+            user_agent: PYTHON_USER_AGENT.to_string(),
         })
     }
 

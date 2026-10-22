@@ -829,11 +829,24 @@ impl AppleAccount {
             format!("com.apple.gs.{}", app)
         };
 
+        // Fresh anisette, never the 60s-cached set: the OTP cached since
+        // login init is up to two of the server's ~30s rotations stale by
+        // the time the user finished 2FA, and this request's deeper
+        // validation rejects it with -80046.
         let anisette_data = self
             .anisette_generator
-            .get_anisette_data(self.grandslam_client.clone())
+            .get_fresh_anisette_data(self.grandslam_client.clone())
             .await
             .context("Failed to get anisette data for login")?;
+
+        // Per-endpoint identity (2026-10): the apptokens gate rejects the
+        // login identity (Windows/iTunes → -80046) and requires an akd
+        // macOS identity — verified live 2026-10-21 with a real session.
+        let app_token_identity = self
+            .anisette_generator
+            .get_app_token_client_info()
+            .await
+            .context("Failed to get app token client info")?;
 
         let spd = self
             .spd
@@ -877,7 +890,7 @@ impl AppleAccount {
 
         let resp = self
             .grandslam_client
-            .plist_request(&gs_service_url, &request, None)
+            .plist_request_as(&gs_service_url, &request, None, &app_token_identity)
             .await
             .context("Failed to send app token request")?
             .check_grandslam_error()

@@ -59,18 +59,42 @@ impl DeveloperSession {
             .as_ref()
             .ok_or_else(|| report!("SPD not available, cannot get adsid"))?;
 
+        // The ESX (developer services) requests must present the same
+        // client identity the app token was minted under — the akd macOS
+        // identity from `get_app_token_client_info`. Sending them with the
+        // account's login client (Windows/iTunes) is rejected with
+        // `Developer error 1100: Your session has expired. Please log in.`
+        // (verified live 2026-10-21 with a real session: iTunes-identity
+        // session → 1100 on listTeams, akd-identity session → teams
+        // listed). The ESX calls carry the GrandSlam client's base headers,
+        // so the client below is what they present.
+        let client_info = account
+            .anisette_generator
+            .get_app_token_client_info()
+            .await
+            .context("Failed to get developer session client info")?;
+        let client = Arc::new(
+            GrandSlam::new(client_info, false, None)
+                .await
+                .context("Failed to build developer session client")?,
+        );
+
         Ok(DeveloperSession::new(
             token,
             spd.get_string("adsid")?,
-            account.grandslam_client.clone(),
+            client,
             account.anisette_generator.clone(),
         ))
     }
 
     pub async fn get_headers(&mut self) -> Result<HeaderMap, Report> {
+        // Fresh anisette per call: every developer-API request consumes an
+        // OTP, and reusing one fetched for a previous request risks the
+        // same stale-OTP rejection (-80046) the apptokens step hit.
+        // Mirrors real akd, which regenerates anisette for every request.
         let mut headers = self
             .anisette_generator
-            .get_anisette_data(self.client.clone())
+            .get_fresh_anisette_data(self.client.clone())
             .await?
             .get_header_map()?;
 

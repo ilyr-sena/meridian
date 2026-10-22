@@ -140,33 +140,116 @@ impl GrandSlam {
         body: &Dictionary,
         additional_headers: Option<HeaderMap>,
     ) -> Result<Dictionary, Report> {
-        let resp = self
-            .post(url)?
-            .headers(additional_headers.unwrap_or_else(reqwest::header::HeaderMap::new))
-            .body(plist_to_xml_string(body))
-            .send()
+        self.plist_request_inner(url, body, additional_headers, &self.client_info)
             .await
-            .context("Failed to send grandslam request")?
-            .error_for_status()
-            .context("Received error response from grandslam")?
-            .text()
+    }
+
+    /// [`plist_request`] presenting a specific client identity — for the
+    /// per-endpoint GSA gates (2026-10: login and `apptokens` accept
+    /// different identities; see `AnisetteProvider::get_app_token_client_info`).
+    pub async fn plist_request_as(
+        &self,
+        url: &str,
+        body: &Dictionary,
+        additional_headers: Option<HeaderMap>,
+        client_info: &AnisetteClientInfo,
+    ) -> Result<Dictionary, Report> {
+        self.plist_request_inner(url, body, additional_headers, client_info)
             .await
-            .context("Failed to read grandslam response as text")?;
+    }
 
-        let dict: Dictionary = plist::from_bytes(resp.as_bytes())
-            .context("Failed to parse grandslam response plist")
-            .attach_with(|| resp.clone())?;
+    /// Shared request core of [`plist_request`] / [`plist_request_as`].
+    ///
+    /// Apple's GSA edge intermittently sheds a rapid consecutive request
+    /// (notably `complete` right after `init`) with a raw
+    /// `503 Service Temporarily Unavailable` — verified by direct testing
+    /// (2026-10-21): ~1 in 5 back-to-back `complete` requests 503s at the
+    /// edge *before* auth processing, and an immediate resend of the
+    /// identical body succeeds (the SRP continuation stays valid). The
+    /// same flakiness can hit any call of the login/2FA exchange, so all
+    /// GSA plist requests get a bounded, backoff-spaced retry on
+    /// 503/429 — those statuses are edge-only rejections, never auth
+    /// results, so resending the same body is always safe.
+    async fn plist_request_inner(
+        &self,
+        url: &str,
+        body: &Dictionary,
+        additional_headers: Option<HeaderMap>,
+        client_info: &AnisetteClientInfo,
+    ) -> Result<Dictionary, Report> {
+        const MAX_ATTEMPTS: u32 = 4;
 
-        let response_plist = dict
-            .get("Response")
-            .and_then(|v| v.as_dictionary())
-            .cloned()
-            .ok_or_else(|| {
-                report!("grandslam response missing 'Response'")
-                    .attach(pretty_print_dictionary(&dict))
-            })?;
+        let payload = plist_to_xml_string(body);
 
-        Ok(response_plist)
+        for attempt in 1..=MAX_ATTEMPTS {
+            let result: Result<reqwest::Response, reqwest_middleware::Error> = self
+                .client
+                .post(url)
+                .headers(Self::base_headers(client_info, false)?)
+                .headers(additional_headers.clone().unwrap_or_default())
+                .body(payload.clone())
+                .send()
+                .await
+                .and_then(|resp| resp.error_for_status().map_err(reqwest_middleware::Error::from));
+
+            let retryable = matches!(&result, Err(e) if e.status().map_or(false, |s| {
+                s == reqwest::StatusCode::SERVICE_UNAVAILABLE
+                    || s == reqwest::StatusCode::TOO_MANY_REQUESTS
+            }));
+
+            if retryable && attempt < MAX_ATTEMPTS {
+                let status = result
+                    .as_ref()
+                    .err()
+                    .and_then(reqwest_middleware::Error::status)
+                    .map(|s| s.as_u16())
+                    .unwrap_or(0);
+                let delay = std::time::Duration::from_secs(attempt as u64);
+                tracing::warn!(
+                    "grandslam {url} attempt {attempt}/{MAX_ATTEMPTS} rejected \
+                     with {status} — retrying in {delay:?}"
+                );
+                tokio::time::sleep(delay).await;
+                continue;
+            }
+
+            // Terminal attempt (success, non-retryable failure, or retries
+            // exhausted) — preserve the original context distinction between
+            // transport and HTTP-status failures.
+            let resp = match result {
+                Ok(resp) => resp,
+                Err(e) if e.is_status() => {
+                    return Err(report!(e)
+                        .context("Received error response from grandslam")
+                        .into());
+                }
+                Err(e) => {
+                    return Err(report!(e)
+                        .context("Failed to send grandslam request")
+                        .into());
+                }
+            };
+
+            let resp_text = resp
+                .text()
+                .await
+                .context("Failed to read grandslam response as text")?;
+
+            let dict: Dictionary = plist::from_bytes(resp_text.as_bytes())
+                .context("Failed to parse grandslam response plist")
+                .attach_with(|| resp_text.clone())?;
+
+            return dict
+                .get("Response")
+                .and_then(|v| v.as_dictionary())
+                .cloned()
+                .ok_or_else(|| {
+                    report!("grandslam response missing 'Response'")
+                        .attach(pretty_print_dictionary(&dict))
+                });
+        }
+
+        unreachable!("the retry loop always returns")
     }
 
     fn base_headers(

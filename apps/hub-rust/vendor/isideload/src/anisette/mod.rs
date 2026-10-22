@@ -141,6 +141,20 @@ pub trait AnisetteProvider {
 
     async fn get_client_info(&self) -> Result<AnisetteClientInfo, Report>;
 
+    /// Client identity for app-token requests (the `apptokens` GSA call that
+    /// issues Xcode developer tokens).
+    ///
+    /// Apple's GrandSlam gates are per-endpoint (verified live 2026-10-21
+    /// with a real session): login requires the Windows/iTunes identity,
+    /// while `apptokens` requires an akd (macOS) identity — the iTunes pair
+    /// is rejected there with `-80046 This action cannot be completed at
+    /// this time`, and both akd macOS variants tested were accepted.
+    /// Providers should override this to return the appropriate identity;
+    /// the default keeps the login identity (single-identity providers).
+    async fn get_app_token_client_info(&self) -> Result<AnisetteClientInfo, Report> {
+        self.get_client_info().await
+    }
+
     async fn provision(&mut self, gs: Arc<GrandSlam>) -> Result<(), Report>;
 
     fn needs_provisioning(&self) -> Result<bool, Report>;
@@ -192,8 +206,53 @@ impl AnisetteDataGenerator {
         }
     }
 
+    /// Fetch anisette data bypassing the 60s cache.
+    ///
+    /// Apple's one-time password (`X-Apple-I-MD`) is time-keyed — the
+    /// omnisette server rotates it roughly every 30s — and the deeper GSA
+    /// validations reject a stale OTP even where the login endpoints
+    /// tolerate one (verified 2026-10-21: the `apptokens` request that
+    /// issues the Xcode developer token fails with
+    /// `-80046 This action cannot be completed at this time` when it
+    /// reuses the OTP cached since login init, while init/complete/2FA —
+    /// which share it — all pass). Real `akd` fetches fresh anisette for
+    /// every request; call this immediately before requests that must
+    /// carry a fresh OTP. The cache is updated with the result so
+    /// subsequent cache readers stay current.
+    pub async fn get_fresh_anisette_data(
+        &mut self,
+        gs: Arc<GrandSlam>,
+    ) -> Result<Arc<AnisetteData>, Report> {
+        let provider = self.provider.read().await;
+
+        if provider.needs_provisioning()? {
+            drop(provider);
+            let mut provider_write = self.provider.write().await;
+            provider_write.provision(gs).await?;
+            drop(provider_write);
+
+            let provider = self.provider.read().await;
+            let data = provider.get_anisette_data().await?;
+            let arc_data = Arc::new(data);
+            self.data = Some(arc_data.clone());
+            Ok(arc_data)
+        } else {
+            let data = provider.get_anisette_data().await?;
+            let arc_data = Arc::new(data);
+            self.data = Some(arc_data.clone());
+            Ok(arc_data)
+        }
+    }
+
     pub async fn get_client_info(&self) -> Result<AnisetteClientInfo, Report> {
         let provider = self.provider.read().await;
         provider.get_client_info().await
+    }
+
+    /// Passthrough to the provider's app-token identity
+    /// ([`AnisetteProvider::get_app_token_client_info`]).
+    pub async fn get_app_token_client_info(&self) -> Result<AnisetteClientInfo, Report> {
+        let provider = self.provider.read().await;
+        provider.get_app_token_client_info().await
     }
 }
